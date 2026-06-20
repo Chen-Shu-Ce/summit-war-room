@@ -1,7 +1,7 @@
 {
-  "updatedAt": "2026-06-19T00:00:00+08:00",
-  "mode": "seed",
-  "note": "Fallback seed data. Connect MARKET_SOURCE_URL or Upstash Redis for monthly automated updates.",
+  "updatedAt": "2026-06-20T00:00:00+08:00",
+  "mode": "local-source",
+  "note": "Monthly market source maintained by Summit Warroom.",
   "items": [
     {"id":"copper","zh":"銅","en":"LME COPPER","unit":"US$ / 公噸","price":9180,"changePct":-3.4,"read":"近 6 月回落，但供應商庫存成本未同步下降。","history":[100,98,99,95,93,90,91,88,86,87,84,83]},
     {"id":"aluminium","zh":"鋁","en":"LME ALUMINIUM","unit":"US$ / 公噸","price":2495,"changePct":0.6,"read":"區間整理，替代議價空間有限。","history":[80,81,79,82,80,83,82,84,83,85,84,85]},
