@@ -23,3 +23,5 @@ module.exports = async function handler(req, res) {
     res.status(200).json({ ...FALLBACK, mode: 'fallback', error: String(err && err.message ? err.message : err) });
   }
 };
+
+
