@@ -1,4 +1,5 @@
 const FALLBACK = require('../public/data/market-seed.json');
+const REDIS_KEY = 'summitwarroom:market:data';
 
 async function redisGet(key) {
   const url = process.env.KV_REST_API_URL;
@@ -15,13 +16,11 @@ async function redisGet(key) {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   try {
-    const data = await redisGet('summitwarroom:market:data');
+    const data = await redisGet(REDIS_KEY);
     res.status(200).json(data || FALLBACK);
   } catch (err) {
     res.status(200).json({ ...FALLBACK, mode: 'fallback', error: String(err && err.message ? err.message : err) });
   }
 };
-
-
