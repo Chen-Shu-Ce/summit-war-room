@@ -39,3 +39,9 @@ Test:
 - Renamed PP card from 塑膠 to 塑膠粒.
 - Market dashboard now displays five cards: copper, aluminium, steel, plastic resin, USD/TWD.
 - After deploy, run `/api/cron/update-market` once to overwrite Redis cache.
+
+
+## v12 修正
+- 銅價從 9,180 修正為 13,700 US$/公噸。
+- `public/data/market-source.json` 與 `public/data/market-seed.json` 已同步更新。
+- 前台 fallback 已同步更新，避免短暫顯示舊銅價。
