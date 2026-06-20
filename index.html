@@ -648,7 +648,7 @@ blockquote,figcaption{text-wrap:pretty}                    /* 內文：避免孤
   <div class="wrap">
     <div class="sec-head center reveal"><div class="eyebrow">THE PLATFORM · 採購決策作戰中心</div><h2>SUMMIT WAR ROOM</h2><p>不是聊天機器人，是一套 L0–L5 的採購情報指揮體系——市場訊號一路收斂，最後變成董事長能直接拍板的一張決策卡。</p></div>
     <div class="wr-layers reveal">
-      <a class="wl" href="#warroom-live"><span class="wl-code">L5</span><div class="wl-t"><b>Market Intelligence</b><span>市場情報中心</span></div><div class="wl-d">銅／鋁／鋼／塑膠／海運／匯率即時行情<span class="wl-go">進入即時戰情室 →</span></div></a>
+      <a class="wl" href="#warroom-live"><span class="wl-code">L5</span><div class="wl-t"><b>Market Intelligence</b><span>市場情報中心</span></div><div class="wl-d">銅／鋁／鋼／塑膠粒／匯率每月行情<span class="wl-go">進入即時戰情室 →</span></div></a>
       <div class="wl"><span class="wl-code">L4</span><div class="wl-t"><b>Supplier Intelligence</b><span>供應商情報中心</span></div><div class="wl-d">供應商畫像、依賴度與替代來源評估</div></div>
       <div class="wl"><span class="wl-code">L3</span><div class="wl-t"><b>Quotation Analyzer</b><span>報價分析</span></div><div class="wl-d">拆解成本結構，標出不合理漲幅與議價空間</div></div>
       <div class="wl"><span class="wl-code">L2</span><div class="wl-t"><b>Cost Intelligence</b><span>成本分析</span></div><div class="wl-d">BOM 級成本展開與毛利影響模擬</div></div>
@@ -719,10 +719,10 @@ blockquote,figcaption{text-wrap:pretty}                    /* 內文：避免孤
     <div style="margin-bottom:28px">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px"><span class="lvl">L5</span><span class="eyebrow">MARKET INTELLIGENCE · 即時行情</span></div>
       <h2 style="font-family:var(--serif);font-weight:700;font-size:clamp(24px,3.2vw,38px);margin:0">戰情室：市場情報中心</h2>
-      <div class="wr-sub">六大採購關鍵成本指標每月自動更新。漲價對採購不利以 <b style="color:var(--risk)">紅</b> 標、回落對採購有利以 <b style="color:var(--gain)">綠</b> 標。</div>
+      <div class="wr-sub">五大採購關鍵成本指標每月自動更新。漲價對採購不利以 <b style="color:var(--risk)">紅</b> 標、回落對採購有利以 <b style="color:var(--gain)">綠</b> 標。</div>
     </div>
     <div class="mkt-grid" id="wrMktGrid"></div>
-    <div class="src-note">資料來源：LME（銅／鋁）· 中鋼盤元 · 台塑 PP · SCFI 上海航運指數 · 台銀匯率。系統每月 5 日自動更新；資料來源可由 MARKET_SOURCE_URL 接入。</div>
+    <div class="src-note">資料來源：LME（銅／鋁）· 中鋼盤元 · 台塑 PP 塑膠粒 · 台銀匯率。系統每月 5 日自動更新；資料來源可由 MARKET_SOURCE_URL 接入。</div>
   </div>
 </section>
 <script>
@@ -735,8 +735,7 @@ blockquote,figcaption{text-wrap:pretty}                    /* 內文：避免孤
    {zh:'銅',en:'LME COPPER',val:'9,180',unit:'US$ / 公噸',chg:'-3.4%',dir:'down',read:'近 6 月回落，但供應商庫存成本未同步下降。',data:[100,98,99,95,93,90,91,88,86,87,84,83]},
    {zh:'鋁',en:'LME ALUMINIUM',val:'2,495',unit:'US$ / 公噸',chg:'+0.6%',dir:'up',read:'區間整理，替代議價空間有限。',data:[80,81,79,82,80,83,82,84,83,85,84,85]},
    {zh:'鋼',en:'中鋼盤元 REBAR',val:'19,600',unit:'NT$ / 公噸',chg:'-1.1%',dir:'down',read:'盤元走弱，留意下一季合約報價。',data:[90,90,89,88,89,87,86,87,85,84,85,83]},
-   {zh:'塑膠',en:'PP 聚丙烯',val:'1,015',unit:'US$ / 公噸',chg:'-0.8%',dir:'down',read:'隨原油偏弱，short-term 仍有下行壓力。',data:[70,71,70,69,70,68,69,67,66,67,65,66]},
-   {zh:'海運',en:'SCFI 運價',val:'1,712',unit:'指數點',chg:'+4.2%',dir:'up',read:'運價反彈，進口到岸成本上行。',data:[60,58,62,64,61,66,68,65,70,72,71,74]},
+   {zh:'塑膠粒',en:'PP Resin',val:'1,015',unit:'US$ / 公噸',chg:'-0.8%',dir:'down',read:'塑膠粒價格偏弱，短期仍有議價空間。',data:[70,71,70,69,70,68,69,67,66,67,65,66]},
    {zh:'匯率',en:'USD / TWD',val:'31.60',unit:'台幣 / 美元',chg:'+0.2%',dir:'up',read:'美元兌台幣維持31.6附近，進口採購成本壓力相對穩定。',data:[31.2,31.4,31.5,31.6,31.5,31.7,31.6,31.5,31.6,31.7,31.6,31.6]}
   ];
 
@@ -760,7 +759,7 @@ blockquote,figcaption{text-wrap:pretty}                    /* 內文：避免孤
     return '<div class="mcard"><div class="top"><div class="nm"><span class="zh">'+m.zh+'</span><span class="en">'+m.en+'</span></div><span class="chg '+m.dir+'">'+m.chg+'</span></div><div class="val">'+m.val+'</div><div class="unit">'+m.unit+'</div>'+spark(m.data,m.dir)+'<div class="read">'+m.read+'</div></div>';}).join('');}
   render(FALLBACK);
   fetch('/api/market-data?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).then(function(api){
-    if(api&&api.items){render(normalize(api));var el=document.querySelector('#warroom-live .src-note');if(el&&api.updatedAt){el.textContent='資料來源：LME／中鋼／台塑 PP／SCFI／台銀匯率。最近更新：'+new Date(api.updatedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'；系統每月 5 日自動更新。';}}
+    if(api&&api.items){render(normalize(api));var el=document.querySelector('#warroom-live .src-note');if(el&&api.updatedAt){el.textContent='資料來源：LME／中鋼／台塑 PP 塑膠粒／台銀匯率。最近更新：'+new Date(api.updatedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'；系統每月 5 日自動更新。';}}
   }).catch(function(){render(FALLBACK);});
 })();
 </script>
@@ -770,7 +769,7 @@ blockquote,figcaption{text-wrap:pretty}                    /* 內文：避免孤
     <h2>我們的每一個判斷，背後都是一座資料庫</h2>
     <p class="moat-lead">很多人以為 SaaS 最值錢。其實不一定——真正值錢的，是這座<b>持續累積的採購情報資料庫</b>。它讓每一份董事長決策報告，都不是顧問的「意見」，而是有數據撐腰的「結論」。</p>
     <div class="moat-grid">
-      <div class="moat-c"><span class="mi">01</span><b>原物料價格</b><span class="d">銅／鋁／鋼／塑膠／海運／匯率的即時行情與歷史走勢。</span></div>
+      <div class="moat-c"><span class="mi">01</span><b>原物料價格</b><span class="d">銅／鋁／鋼／塑膠粒／匯率的每月行情與歷史走勢。</span></div>
       <div class="moat-c"><span class="mi">02</span><b>供應商歷史報價</b><span class="d">跨年度、跨品項的報價軌跡，看穿每一次調漲的真實理由。</span></div>
       <div class="moat-c"><span class="mi">03</span><b>議價成功率</b><span class="d">哪種策略、在哪一類供應商身上真正有效。</span></div>
       <div class="moat-c"><span class="mi">04</span><b>漲價模型</b><span class="d">市場連動 vs 不合理漲幅的判別，標出可議空間。</span></div>

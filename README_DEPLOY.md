@@ -32,3 +32,10 @@ Test:
 - FX card default is 31.60 in `public/index.html`, `public/data/market-source.json`, and `public/data/market-seed.json`.
 - `/api/cron/update-market` now tries live USD/TWD APIs, but if they fail it still writes `31.60` to Redis instead of leaving old 32.74 values.
 - `/api/market-data` sends `Cache-Control: no-store` to avoid stale card values.
+
+
+## v11 Update
+- Removed SCFI / 海運 card from market dashboard.
+- Renamed PP card from 塑膠 to 塑膠粒.
+- Market dashboard now displays five cards: copper, aluminium, steel, plastic resin, USD/TWD.
+- After deploy, run `/api/cron/update-market` once to overwrite Redis cache.
