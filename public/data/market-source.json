@@ -1,6 +1,6 @@
 {
   "updatedAt": "2026-06-20T00:00:00+08:00",
-  "mode": "local-source",
+  "mode": "monthly-source",
   "note": "Monthly market source maintained by Summit Warroom.",
   "items": [
     {"id":"copper","zh":"銅","en":"LME COPPER","unit":"US$ / 公噸","price":9180,"changePct":-3.4,"read":"近 6 月回落，但供應商庫存成本未同步下降。","history":[100,98,99,95,93,90,91,88,86,87,84,83]},
