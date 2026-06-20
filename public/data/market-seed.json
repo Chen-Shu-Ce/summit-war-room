@@ -1,7 +1,7 @@
 {
   "updatedAt": "2026-06-19T00:00:00+08:00",
   "mode": "seed",
-  "note": "Fallback seed data. Used only when Redis/source update fails.",
+  "note": "Fallback seed data; FX default set near 31.60.",
   "items": [
     {
       "id": "copper",
@@ -140,7 +140,9 @@
         31.6,
         31.6
       ],
-      "previousPrice": 31.55
+      "previousPrice": 31.55,
+      "dir": "up",
+      "signal": "neutral"
     }
   ]
 }
