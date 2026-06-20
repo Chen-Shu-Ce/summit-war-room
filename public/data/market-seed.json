@@ -1,7 +1,7 @@
 {
   "updatedAt": "2026-06-21T00:00:00+08:00",
   "mode": "monthly-source",
-  "note": "Summit Warroom 每月市場資料來源。匯率由系統自動更新，其餘項目每月維護。",
+  "note": "資料來源：LME / 台灣鋼價指標 / 台塑 PP / 匯率 API。最近更新：系統每月 5 日自動更新。",
   "items": [
     {
       "id": "copper",
