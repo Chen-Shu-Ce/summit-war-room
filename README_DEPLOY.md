@@ -26,3 +26,9 @@ Test:
 - `/api/cron/update-market` now fetches USD/TWD from Frankfurter API monthly and writes the updated FX card into Upstash Redis.
 - Optional environment variable: `FX_API_URL` can override the default endpoint.
 - If the FX API fails, the site keeps using the local source value and will not break the homepage.
+
+
+## v10 FX hard fallback
+- FX card default is 31.60 in `public/index.html`, `public/data/market-source.json`, and `public/data/market-seed.json`.
+- `/api/cron/update-market` now tries live USD/TWD APIs, but if they fail it still writes `31.60` to Redis instead of leaving old 32.74 values.
+- `/api/market-data` sends `Cache-Control: no-store` to avoid stale card values.
