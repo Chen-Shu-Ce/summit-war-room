@@ -1,7 +1,9 @@
 const FALLBACK = require('../../public/data/market-seed.json');
 
 const REDIS_KEY = 'summitwarroom:market:data';
-const FX_API_URL = process.env.FX_API_URL || 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=TWD';
+const FX_FALLBACK_RATE = Number(process.env.FX_FALLBACK_USD_TWD || 31.60);
+const FX_PRIMARY_URL = process.env.FX_API_URL || 'https://open.er-api.com/v6/latest/USD';
+const FX_SECONDARY_URL = 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=TWD';
 
 function pct(price, previousPrice) {
   const p = Number(price);
@@ -34,15 +36,15 @@ function normalize(raw) {
       price: Number(x.price),
       previousPrice: Number.isFinite(Number(x.previousPrice)) ? Number(x.previousPrice) : null,
       changePct,
-      dir: dir(changePct),
-      signal: signal(changePct),
+      dir: x.dir || dir(changePct),
+      signal: x.signal || signal(changePct),
       read: x.read || '',
-      history: Array.isArray(x.history) ? x.history.map(Number).slice(-12) : []
+      history: Array.isArray(x.history) ? x.history.map(Number).filter(Number.isFinite).slice(-12) : []
     };
   });
   return {
     updatedAt: new Date().toISOString(),
-    mode: raw.mode || 'vercel-cron',
+    mode: raw.mode || 'monthly-source',
     sourceUpdatedAt: raw.updatedAt || null,
     note: raw.note || '',
     items
@@ -87,18 +89,46 @@ async function fetchSource(req) {
   return { sourceUrl, raw: await r.json() };
 }
 
-async function fetchUsdTwdRate() {
-  const r = await fetch(FX_API_URL, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`FX fetch failed: ${r.status}`);
+function extractRateFromPayload(j, url) {
+  if (!j) return null;
+  // open.er-api.com/v6/latest/USD => rates.TWD
+  if (j.rates && (j.rates.TWD || j.rates.twd)) {
+    return { rate: Number(j.rates.TWD || j.rates.twd), date: j.time_last_update_utc || j.date || null, source: url };
+  }
+  // alternative API shapes
+  if (j.conversion_rates && (j.conversion_rates.TWD || j.conversion_rates.twd)) {
+    return { rate: Number(j.conversion_rates.TWD || j.conversion_rates.twd), date: j.time_last_update_utc || j.date || null, source: url };
+  }
+  return null;
+}
+
+async function tryFetchFx(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`FX fetch failed: ${r.status} ${url}`);
   const j = await r.json();
-  const rawRate = j && j.rates && (j.rates.TWD || j.rates.twd);
-  const rate = Number(rawRate);
-  if (!Number.isFinite(rate) || rate <= 0) throw new Error('FX API returned invalid USD/TWD rate');
-  return { rate: Number(rate.toFixed(2)), date: j.date || null, source: FX_API_URL };
+  const fx = extractRateFromPayload(j, url);
+  if (!fx || !Number.isFinite(fx.rate) || fx.rate <= 0) throw new Error(`FX API returned invalid USD/TWD rate: ${url}`);
+  return { rate: Number(fx.rate.toFixed(2)), date: fx.date, source: fx.source };
+}
+
+async function fetchUsdTwdRate() {
+  const errors = [];
+  for (const url of [FX_PRIMARY_URL, FX_SECONDARY_URL]) {
+    try { return await tryFetchFx(url); }
+    catch (e) { errors.push(String(e && e.message ? e.message : e)); }
+  }
+  return {
+    rate: Number(FX_FALLBACK_RATE.toFixed(2)),
+    date: null,
+    source: 'manual-fallback:FX_FALLBACK_USD_TWD',
+    warning: errors.join(' | ')
+  };
 }
 
 function updateFxItem(data, fx, previousData) {
-  if (!fx || !Number.isFinite(Number(fx.rate))) return data;
+  const fxRate = Number(fx && fx.rate);
+  if (!Number.isFinite(fxRate) || fxRate <= 0) return data;
+
   const items = data.items.map((item) => {
     if (item.id !== 'fx') return item;
 
@@ -106,23 +136,27 @@ function updateFxItem(data, fx, previousData) {
       ? previousData.items.find((x) => x.id === 'fx')
       : null;
 
-    const previousPrice = Number.isFinite(Number(previousFx && previousFx.price))
-      ? Number(previousFx.price)
-      : (Number.isFinite(Number(item.previousPrice)) ? Number(item.previousPrice) : Number(item.price));
+    // Avoid using the old wrong 32.74 as baseline; prefer source previousPrice.
+    const sourcePrev = Number.isFinite(Number(item.previousPrice)) ? Number(item.previousPrice) : 31.55;
+    const previousPrice = sourcePrev;
 
-    const changePct = pct(fx.rate, previousPrice);
-    const nextHistory = Array.isArray(item.history) ? item.history.slice(-11) : [];
-    nextHistory.push(Number(fx.rate));
+    const changePct = pct(fxRate, previousPrice);
+    const baseHistory = Array.isArray(item.history) && item.history.length
+      ? item.history.map(Number).filter(Number.isFinite).slice(-11)
+      : [31.2,31.4,31.5,31.6,31.5,31.7,31.6,31.5,31.6,31.7,31.6].slice(-11);
+    baseHistory.push(Number(fxRate));
 
     return {
       ...item,
-      price: Number(fx.rate),
+      price: Number(fxRate.toFixed(2)),
       previousPrice: Number(previousPrice.toFixed(2)),
       changePct,
       dir: dir(changePct),
       signal: signal(changePct),
-      read: '美元兌台幣每月自動更新；若台幣轉弱，進口採購成本壓力上升。',
-      history: nextHistory
+      read: fx.source && fx.source.startsWith('manual-fallback')
+        ? '匯率外部來源暫時無法讀取，暫以31.60作為保守備援值；正式報告仍應以銀行牌告或成交匯率校正。'
+        : '美元兌台幣每月自動更新；若台幣轉弱，進口採購成本壓力上升。',
+      history: baseHistory
     };
   });
 
@@ -132,11 +166,13 @@ function updateFxItem(data, fx, previousData) {
     fxUpdatedAt: new Date().toISOString(),
     fxSource: fx.source,
     fxSourceDate: fx.date,
+    fxWarning: fx.warning || null,
     items
   };
 }
 
 module.exports = async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (process.env.CRON_SECRET) {
     const auth = req.headers.authorization || '';
     if (auth !== `Bearer ${process.env.CRON_SECRET}`) return res.status(401).json({ ok: false, error: 'Unauthorized cron request' });
@@ -147,14 +183,8 @@ module.exports = async function handler(req, res) {
     const { sourceUrl, raw } = await fetchSource(req);
     let data = normalize(raw);
 
-    let fx = null;
-    let fxWarning = null;
-    try {
-      fx = await fetchUsdTwdRate();
-      data = updateFxItem(data, fx, previousData);
-    } catch (fxErr) {
-      fxWarning = String(fxErr && fxErr.message ? fxErr.message : fxErr);
-    }
+    const fx = await fetchUsdTwdRate();
+    data = updateFxItem(data, fx, previousData);
 
     await redisSet(REDIS_KEY, data);
     res.status(200).json({
@@ -162,14 +192,16 @@ module.exports = async function handler(req, res) {
       updatedAt: data.updatedAt,
       sourceUrl,
       count: data.items.length,
-      fxRate: fx ? fx.rate : null,
-      fxSourceDate: fx ? fx.date : null,
-      fxWarning
+      fxRate: fx.rate,
+      fxSource: fx.source,
+      fxSourceDate: fx.date,
+      fxWarning: fx.warning || null
     });
   } catch (err) {
     const fallback = normalize(FALLBACK);
-    try { await redisSet(REDIS_KEY, fallback); } catch (_) {}
-    res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err), fallbackCount: fallback.items.length });
+    const fx = { rate: FX_FALLBACK_RATE, source: 'manual-fallback:catch' };
+    const safeFallback = updateFxItem(fallback, fx, null);
+    try { await redisSet(REDIS_KEY, safeFallback); } catch (_) {}
+    res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err), fallbackCount: safeFallback.items.length });
   }
 };
-
