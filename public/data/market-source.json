@@ -139,8 +139,10 @@
         31.6,
         31.6
       ],
-      "changePct": 0.2
+      "changePct": 0.2,
+      "dir": "up",
+      "signal": "neutral"
     }
   ],
-  "note": "每月市場資料來源，由 Summit Warroom 維護；匯率由排程自動更新。"
+  "note": "每月市場資料來源，由 Summit Warroom 維護；匯率由排程自動更新，外部來源失敗時使用保守備援值。"
 }
