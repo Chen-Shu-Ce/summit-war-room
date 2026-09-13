@@ -160,3 +160,93 @@ test('圖框比例只適用主要視圖 —— 大樣有自己的比例', () => 
   assert.ok(Math.abs(wrong - 5.997) < 0.01, `會得到 ${wrong.toFixed(3)} M`);
   assert.ok(wrong / 0.6 > 9.9, '錯 10 倍');
 });
+
+/* ────────── NO SCALE：真實標單圖上最常見的寫法 ────────── */
+
+test('認得各種「不按比例」寫法，NO SCALE 尤其不能漏', () => {
+  const nts = (s) => P.findScales(s).some((x) => x.nts);
+  // 這一組是真實標單圖上會出現的（空軍那份七張全部寫 NO SCALE）
+  assert.ok(nts('NO SCALE'), 'NO SCALE 是最常見的寫法，第一版漏掉了');
+  assert.ok(nts('NOSCALE'));
+  assert.ok(nts('NO-SCALE'));
+  assert.ok(nts('比例尺 NO SCALE'));
+  assert.ok(nts('SCALE: NONE'));
+  assert.ok(nts('SCALE:N/A'));
+  assert.ok(nts('NTS'));
+  assert.ok(nts('N.T.S.'));
+  assert.ok(nts('不按比例'));
+  assert.ok(nts('不依比例'));
+  assert.ok(nts('非按比例'));
+  assert.ok(nts('無比例尺'));
+});
+
+test('不把正常比例誤判成「不按比例」', () => {
+  const nts = (s) => P.findScales(s).some((x) => x.nts);
+  for (const s of ['1:100', 'A1圖:1:100', 'SCALE 1:50', '比例 1/30', "f'c=280kg/cm2", '#3@150', 'SCALE BAR']) {
+    assert.ok(!nts(s), `${s} 不該被判成不按比例`);
+  }
+});
+
+test('圖框寫 NO SCALE → 整份判定不可用', () => {
+  const r = P.analyze(1191, 842, ['SCALE', 'NO SCALE', 'UNIT CM']);
+  assert.equal(r.paper.name, 'A3');
+  assert.equal(r.nts, true);
+  assert.equal(r.usable, false, '不按比例的圖不能量');
+  assert.ok(r.evidence.some((e) => e.level === 'bad'));
+});
+
+/* ────────── 掃描圖：讀不到 ≠ 沒有 ────────── */
+
+test('純掃描頁判定：零文字、零向量、只有一張影像', () => {
+  // 這組繪圖指令是真實標單圖七頁每一頁的實際內容
+  const r = P.classifyPage({
+    textCount: 0,
+    ops: { transform: 2, save: 1, dependency: 1, paintImageXObject: 1, restore: 1 },
+    imageWidth: 4960, widthPt: 1191,
+  });
+  assert.equal(r.kind, 'scan');
+  assert.equal(r.measurable, false);
+  assert.equal(Math.round(r.dpi), 300, '影像像素 ÷ 紙張英吋 = 掃描解析度');
+  assert.equal(r.reasons[0].level, 'bad');
+  assert.match(r.reasons[0].msg, /純掃描圖/);
+  assert.match(r.reasons[0].msg, /300 dpi/);
+});
+
+test('向量頁不得被誤判為掃描', () => {
+  const r = P.classifyPage({ textCount: 5, ops: { constructPath: 800, stroke: 600, transform: 40 } });
+  assert.equal(r.kind, 'vector');
+  assert.equal(r.measurable, true);
+  assert.deepEqual(r.reasons, []);
+});
+
+test('掃描底圖上疊向量標註 → mixed，且要提醒底圖未必按比例', () => {
+  const r = P.classifyPage({ textCount: 12, ops: { paintImageXObject: 1, constructPath: 40, stroke: 30 } });
+  assert.equal(r.kind, 'mixed');
+  assert.equal(r.measurable, true);
+  assert.match(r.reasons[0].msg, /不代表底圖是按比例/);
+});
+
+test('空白頁回 empty，不假裝是別的', () => {
+  assert.equal(P.classifyPage({ textCount: 0, ops: {} }).kind, 'empty');
+  assert.equal(P.classifyPage({}).kind, 'empty');
+});
+
+test('掃描圖：「讀不到比例」與「沒有比例」要分開講', () => {
+  const r = P.analyze(1191, 842, [], {
+    textCount: 0, ops: { transform: 2, save: 1, paintImageXObject: 1, restore: 1 },
+  });
+  assert.equal(r.scan, true);
+  assert.equal(r.usable, false);
+  assert.equal(r.nts, false, '沒讀到 NTS 不等於不是 NTS');
+  const hint = r.evidence.find((e) => e.kind === 'scan-noscale');
+  assert.ok(hint, '必須明說「讀不到文字所以判斷不了，請人眼確認」');
+  assert.match(hint.msg, /NO SCALE/);
+  assert.match(hint.msg, /人眼確認/);
+});
+
+test('掃描圖的紙張規格仍判得出來 —— 那跟讀不讀得到文字無關', () => {
+  const r = P.analyze(1191, 842, [], { textCount: 0, ops: { paintImageXObject: 1 } });
+  assert.equal(r.paper.name, 'A3');
+  assert.equal(r.exact, true);
+  assert.ok(r.evidence.some((e) => e.kind === 'paper' && e.level === 'ok'));
+});

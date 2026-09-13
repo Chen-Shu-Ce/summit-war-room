@@ -932,6 +932,7 @@ function updateScaleChip() {
   const i = v.scaleInfo();
   const chip = $('#scaleChip');
   chip.style.cursor = 'pointer';
+  if (i.notToScale) { chip.className = 'chip bad'; chip.textContent = '不按比例（量測無意義）'; return; }
   if (!i.metersPerUnit) { chip.className = 'chip bad'; chip.textContent = '比例：未設定（量測無效）'; return; }
   const label = { native: '圖檔原生單位', 'two-point': '兩點校正', 'vector-rms': `${i.points} 段最小平方`, 'declared-scale': '圖框標註比例' }[i.method] || i.method;
   chip.className = 'chip ' + (i.method === 'declared-scale' ? 'warn' : i.rms != null && i.rms > 0.02 ? 'warn' : 'ok');
@@ -943,7 +944,8 @@ function openScaleDialog(firstTime = false) {
   if (!v.mode) return dialog('尚未載入圖面', '<p>請先載入 DWG／DXF／PDF。</p>');
   const fr = state.pdfScale;
   dialog('設定圖面比例', `
-    ${firstTime ? '<p class="chip bad" style="display:block;padding:7px 10px">PDF 沒有真實尺寸資訊。未設定比例前，所有量測值都不會換算成工程單位。</p>' : ''}
+    ${notToScaleBlock(v, fr)}
+    ${firstTime && !v.notToScale ? '<p class="chip bad" style="display:block;padding:7px 10px">PDF 沒有真實尺寸資訊。未設定比例前，所有量測值都不會換算成工程單位。</p>' : ''}
     ${multiScaleWarning()}
     ${fr ? framedScaleBlock(fr) : ''}
     <h4 style="margin-top:14px">方法一：實測校正（建議，且是唯一對大樣有效的方法）</h4>
@@ -962,6 +964,11 @@ function openScaleDialog(firstTime = false) {
     const b = body.querySelector('#btnFramed');
     if (b) b.onclick = () => {
       v.setDeclaredScale(fr.ratio); updateScaleChip(); renderMeasureList(); $('#dlg').close();
+    };
+    const nts = body.querySelector('#chkNts');
+    if (nts) nts.onchange = () => {
+      v.setNotToScale(nts.checked, '人工確認：圖框標示不按比例');
+      updateScaleChip(); renderMeasureList();
     };
   });
 }
@@ -987,8 +994,56 @@ async function readFramedScale(pdf, pageNo) {
     const vp = page.getViewport({ scale: 1 });
     const tc = await page.getTextContent();
     const strings = tc.items.map((i) => i.str).filter((x) => x && x.trim());
-    state.pdfScale = PS.analyze(vp.width, vp.height, strings);
+    // 同時看這一頁是向量還是掃描 —— 純掃描圖讀不到任何文字，
+    // 「讀不到比例」與「沒有比例」是兩件完全不同的事。
+    const pdfjs = await import('../../vendor/pdfjs/pdf.min.mjs');
+    const ol = await page.getOperatorList();
+    const names = {};
+    for (const [k, v] of Object.entries(pdfjs.OPS)) names[v] = k;
+    const ops = {};
+    for (const f of ol.fnArray) { const n = names[f] || String(f); ops[n] = (ops[n] || 0) + 1; }
+    let imageWidth = null;
+    for (let j = 0; j < ol.fnArray.length; j++) {
+      if (names[ol.fnArray[j]] !== 'paintImageXObject') continue;
+      try { const o = page.objs.get(ol.argsArray[j][0]); if (o && o.width) imageWidth = o.width; } catch { /* 尚未解碼 */ }
+    }
+    state.pdfScale = PS.analyze(vp.width, vp.height, strings, { textCount: strings.length, ops, imageWidth });
+    // 圖框明文寫著不按比例 → 直接鎖住，量出來的數字沒有意義
+    if (state.pdfScale.nts) state.viewer.setNotToScale(true, '圖框標示不按比例');
+    else state.viewer.setNotToScale(false);
   } catch (e) { console.warn('讀不到圖框比例', e); }
+}
+
+/**
+ * 「不按比例」是比「未校正」嚴重得多的狀態，所以放在最上面。
+ *
+ * 未校正 = 缺一個數字，校了就能算。
+ * 不按比例 = 圖本身的幾何不代表實際尺寸，校正再準也沒有意義。
+ *
+ * 純掃描圖讀不到文字，圖框就算寫著 NO SCALE 也抓不到 ——
+ * 那一格只能請人眼看一次，然後自己勾。這是工具問不到、只能問人的事。
+ */
+function notToScaleBlock(v, fr) {
+  const detected = !!(fr && fr.nts);
+  const scan = !!(fr && fr.scan);
+  const on = !!v.notToScale;
+  return `<div class="feas ${on ? 'bad' : ''}" style="margin-bottom:10px">
+    ${on ? `<b>這張圖標示為「不按比例」，量測不會換算成工程單位。</b>
+      <div class="hint" style="margin-top:4px">${esc(v.notToScaleWhy || '')}</div>
+      <p style="margin:7px 0 0">圖上寫的尺寸數字仍然有效 —— 那些要<b>用讀的</b>，
+      讀完填進工項的「人工確認」欄，並註明出自哪一張圖。這樣數量的出處才是對的：
+      它來自圖上的標註，不是來自我對一張示意圖的量測。</p>`
+      : `<b>這張圖是按比例畫的嗎？</b>
+      <p style="margin:6px 0 0">標單圖、示意圖經常標示「NO SCALE」——
+      那種圖的幾何不代表實際尺寸，量測再怎麼校正都沒有意義，圖上寫的數字才算數。</p>`}
+    ${scan && !detected ? `<p class="chip warn" style="display:block;padding:7px 10px;margin-top:8px;white-space:normal">
+      這是純掃描圖，讀不到任何文字，所以<b>工具無法自己判斷</b>圖框寫的是什麼比例。
+      請看一下標題欄的「比例尺」欄位再勾下面那一格。</p>` : ''}
+    <label style="display:flex;gap:7px;align-items:center;margin-top:9px;cursor:pointer">
+      <input type="checkbox" id="chkNts" style="width:auto" ${on ? 'checked' : ''}>
+      <span>這張圖標示不按比例（NO SCALE／NTS）${detected ? '　<span class="chip bad">已從圖框文字偵測到</span>' : ''}</span>
+    </label>
+  </div>`;
 }
 
 function multiScaleWarning() {

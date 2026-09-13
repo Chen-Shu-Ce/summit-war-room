@@ -633,6 +633,65 @@ ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seq
 ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
 await page.waitForTimeout(400);
 
+console.log('\n【6之三】掃描圖與不按比例的圖');
+await page.locator('#tabView').click();
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-scan.pdf'));
+await page.waitForFunction(() => window.__takeoff.state.pdfScale !== null, null, { timeout: 30000 });
+await page.waitForTimeout(700);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+const sc = await page.evaluate(() => {
+  const f = window.__takeoff.state.pdfScale;
+  return { paper: f.paper && f.paper.name, kind: f.page.kind, text: f.page.textCount,
+    images: f.page.images, paths: f.page.paths, scan: f.scan, nts: f.nts, usable: f.usable,
+    hint: f.evidence.some((e) => e.kind === 'scan-noscale') };
+});
+ok('偵測出純掃描頁（零文字、零向量、一張影像）',
+  sc.kind === 'scan' && sc.text === 0 && sc.paths === 0 && sc.images === 1, JSON.stringify(sc));
+ok('掃描圖仍判得出紙張規格 A3', sc.paper === 'A3', JSON.stringify(sc));
+ok('掃描圖一律判定不可直接套用比例', sc.usable === false);
+ok('明說「讀不到文字所以判斷不了，請人眼確認」', sc.hint === true);
+ok('讀不到 NTS 不等於不是 NTS', sc.nts === false);
+
+await page.locator('#scaleChip').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+const scTxt = await page.locator('#dlgBody').innerText();
+ok('對話框最上方先問「這張圖是按比例畫的嗎」', scTxt.includes('這張圖是按比例畫的嗎'), '');
+ok('提醒純掃描圖工具無法自己判斷', scTxt.includes('工具無法自己判斷'), '');
+// 人工勾選「不按比例」後，就算硬套比例也不給工程單位
+await page.locator('#chkNts').check();
+await page.waitForTimeout(300);
+const ntsBlocked = await page.evaluate(() => {
+  const v = window.__takeoff.state.viewer;
+  v.setDeclaredScale(100);                       // 故意硬套一個比例
+  const m = { type: 'length', pts: [{ x: 0, y: 0 }, { x: 200, y: 0 }] };
+  const e = v.engValue(m);
+  return { value: e.value, notToScale: e.notToScale, raw: e.raw, label: v.label(m),
+    chip: document.querySelector('#scaleChip').textContent };
+});
+ok('標為不按比例後，硬套比例也不給工程單位',
+  ntsBlocked.value === null && ntsBlocked.notToScale === true, JSON.stringify(ntsBlocked));
+ok('量測標籤直接標示「不按比例」', /不按比例/.test(ntsBlocked.label), ntsBlocked.label);
+ok('比例晶片顯示「不按比例（量測無意義）」', /不按比例/.test(ntsBlocked.chip), ntsBlocked.chip);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+
+// 讀得到文字時要自動偵測
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-nts.pdf'));
+await page.waitForFunction(() => window.__takeoff.state.pdfScale !== null, null, { timeout: 30000 });
+await page.waitForTimeout(700);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+const auto = await page.evaluate(() => ({
+  nts: window.__takeoff.state.pdfScale.nts,
+  notToScale: window.__takeoff.state.viewer.notToScale,
+  chip: document.querySelector('#scaleChip').textContent,
+}));
+ok('圖框文字寫 NO SCALE → 自動鎖住量測', auto.nts === true && auto.notToScale === true, JSON.stringify(auto));
+await page.evaluate(() => window.__takeoff.state.viewer.setNotToScale(false));
+await page.waitForTimeout(200);
+
 console.log('\n【6之二】PDF 圖框比例與多重比例');
 await page.locator('#tabView').click();
 await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-titleblock.pdf'));

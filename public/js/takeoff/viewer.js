@@ -47,6 +47,8 @@ export class Viewer {
     // 分區比例：一張施工圖常同時有平面 1:100 與大樣 1:10，
     // 整張套同一個比例會讓大樣的量測整批錯 10 倍，而且完全看不出來。
     this.scaleZones = [];              // [{ id, name, rect:{x0,y0,x1,y1}, metersPerUnit, method, ratio, rms }]
+    this.notToScale = false;           // 圖面標示 NO SCALE：量測一律不換算工程單位
+    this.notToScaleWhy = null;
     this.snap = true;
     this.ortho = false;
     this.hover = null;
@@ -311,11 +313,30 @@ export class Viewer {
     return { s: this.metersPerUnit, zone: null };
   }
 
+  /**
+   * 圖面標示「不按比例（NO SCALE / NTS）」。
+   *
+   * 這跟「還沒校正」是兩回事：還沒校正是缺一個數字，校了就能算；
+   * 不按比例是**圖本身的幾何就不代表實際尺寸**，校正再準也沒有意義。
+   * 標單圖、示意圖大量如此，而且圖上通常另外寫著真實尺寸 ——
+   * 那些數字要用讀的，不是用量的。
+   */
+  setNotToScale(on, why) {
+    this.notToScale = !!on;
+    this.notToScaleWhy = on ? (why || '圖面標示不按比例') : null;
+    this.render();
+    this.emit('scale', this.scaleInfo());
+    return this.scaleInfo();
+  }
+
   /** 換算為工程單位：長度→m、面積→m²、角度→度、計數→個。 */
   engValue(m) {
     const raw = this.rawValue(m);
     if (m.type === 'count') return { value: raw, unit: '個' };
     if (m.type === 'angle') return { value: raw, unit: '°' };
+    // 不按比例的圖：不論有沒有校正，都不給工程單位。
+    // 給了就等於背書一個沒有意義的數字。
+    if (this.notToScale) return { value: null, unit: null, raw, notToScale: true, why: this.notToScaleWhy };
     const { s, zone } = this.scaleFor(m);
     if (!s) return { value: null, unit: null, raw, zone: null };
     if (m.type === 'area' || m.type === 'rect') return { value: raw * s * s, unit: 'M2', zone };
@@ -360,6 +381,7 @@ export class Viewer {
   label(m) {
     const e = this.engValue(m);
     if (m.type === 'calib') return `校正 ${this.rawValue(m).toFixed(1)}`;
+    if (e.notToScale) return `${this.rawValue(m).toFixed(1)} (不按比例)`;
     if (e.value == null) return `${this.rawValue(m).toFixed(1)} (未校正)`;
     const d = m.type === 'count' ? 0 : 2;
     return `${e.value.toLocaleString('zh-TW', { maximumFractionDigits: d })} ${e.unit}`;
@@ -416,6 +438,7 @@ export class Viewer {
       points: this.calibrations.length,
       ratio: this.mode === 'pdf' && this.metersPerUnit ? Math.round(this.metersPerUnit / PT_TO_M) : null,
       zones: this.scaleZones.map((z) => ({ id: z.id, name: z.name, ratio: z.ratio, method: z.method })),
+      notToScale: !!this.notToScale, notToScaleWhy: this.notToScaleWhy || null,
     };
   }
 

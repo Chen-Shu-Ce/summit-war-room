@@ -63,8 +63,13 @@ function norm(s) {
   return out.replace(/\s+/g, ' ').trim();
 }
 
-/** 「不按比例」的明示寫法。這種圖不能量，必須講清楚。 */
-const NTS_RE = /\b(NTS|N\.T\.S\.?)\b|不按比例|無比例|未按比例/i;
+/**
+ * 「不按比例」的明示寫法。這種圖不能量，必須講清楚。
+ *
+ * `NO SCALE` 是真實圖面上最常見的寫法（空軍第二戰術戰鬥機聯隊那份標單圖，
+ * 七張標題欄的比例尺欄位全部寫 NO SCALE），而第一版偏偏沒收 —— 補上。
+ */
+const NTS_RE = /\b(N\s*T\s*S|N\.T\.S\.?)\b|\bNO[\s\-_]*SCALE\b|\bSCALE\s*[:：]?\s*(NONE|N\/A|-)\b|不按比例|不依比例|未按比例|非按比例|無比例/i;
 
 /**
  * 從一段文字裡找出所有比例宣告。
@@ -142,6 +147,59 @@ export function pickScale(collected, paper) {
     msg: `圖框裡有 ${list.length} 個比例（${list.map((x) => '1:' + x.ratio).join('、')}），且都沒標明適用紙張，無法判定。` };
 }
 
+/* ────────── 這一頁是向量還是掃描 ────────── */
+
+/**
+ * 判斷一頁 PDF 的性質。
+ *
+ * 真實案例：一份七頁 A3 的標單圖，每一頁的繪圖指令只有
+ *   { transform:2, save:1, dependency:1, paintImageXObject:1, restore:1 }
+ * —— 整頁就是一張點陣圖，沒有文字、沒有向量。
+ *
+ * 這對算量的意義是決定性的：
+ *   沒有文字 → 讀不到圖框、讀不到比例、讀不到任何標註
+ *   沒有向量 → 沒有端點可吸附、沒有圖層可彙總
+ *   只剩像素量測，而像素量測**完全依賴校正是否正確，且無從驗證**
+ *
+ * 所以必須主動講，不能讓使用者以為「載進來了就等於能算」。
+ */
+export function classifyPage(info = {}) {
+  const textCount = info.textCount || 0;
+  const ops = info.ops || {};
+  const images = (ops.paintImageXObject || 0) + (ops.paintInlineImageXObject || 0)
+    + (ops.paintJpegXObject || 0);
+  const paths = (ops.constructPath || 0) + (ops.stroke || 0) + (ops.fill || 0)
+    + (ops.eoFill || 0) + (ops.closeStroke || 0) + (ops.fillStroke || 0);
+  const total = Object.values(ops).reduce((a, b) => a + b, 0);
+
+  const reasons = [];
+  let kind = 'vector';
+  if (!total && !textCount) kind = 'empty';
+  else if (images > 0 && paths <= 2 && textCount === 0) kind = 'scan';
+  else if (images > 0 && (paths > 2 || textCount > 0)) kind = 'mixed';
+
+  // 掃描解析度：影像像素 ÷ 紙張英吋
+  let dpi = null;
+  if (info.imageWidth && info.widthPt) dpi = info.imageWidth / (info.widthPt / 72);
+
+  if (kind === 'scan') {
+    reasons.push({
+      level: 'bad', kind: 'scan',
+      msg: '這一頁是**純掃描圖**：整頁只有一張點陣圖，沒有任何文字或向量。'
+        + (dpi ? `（掃描解析度約 ${Math.round(dpi)} dpi）` : '')
+        + '讀不到圖框比例、讀不到尺寸標註、沒有端點可吸附、沒有圖層可彙總 ——'
+        + '只能靠像素量測，而像素量測完全依賴校正是否正確，且無從驗證。',
+    });
+  } else if (kind === 'mixed') {
+    reasons.push({
+      level: 'warn', kind: 'mixed',
+      msg: `這一頁同時有點陣圖與向量內容（影像 ${images}、路徑 ${paths}、文字 ${textCount}）。`
+        + '底圖若是掃描件，疊在上面的向量標註不代表底圖是按比例的。',
+    });
+  }
+  return { kind, images, paths, textCount, dpi, measurable: kind === 'vector' || kind === 'mixed', reasons };
+}
+
 /** 比例 1:ratio 之下，PDF 的 1 pt 等於現實幾公尺。 */
 export function metersPerPoint(ratio) {
   if (!Q.isNum(ratio) || ratio <= 0) return null;
@@ -153,13 +211,15 @@ export function metersPerPoint(ratio) {
  *
  * 永遠不會自己套用。宣告比例是省掉第一步，不是取代兩點校正。
  */
-export function analyze(widthPt, heightPt, strings) {
+export function analyze(widthPt, heightPt, strings, pageInfo) {
   const paper = detectPaper(widthPt, heightPt);
   const collected = collectScales(strings);
   const picked = pickScale(collected, paper);
   const exact = !!(paper && paper.slack <= EXACT_MM);
+  const page = pageInfo ? classifyPage({ ...pageInfo, widthPt }) : null;
 
   const evidence = [];
+  if (page) evidence.push(...page.reasons);
   if (paper) {
     evidence.push({
       level: exact ? 'ok' : 'warn', kind: 'paper',
@@ -181,9 +241,21 @@ export function analyze(widthPt, heightPt, strings) {
   }
   evidence.push({ level: picked.pick ? 'ok' : 'warn', kind: 'scale', msg: picked.msg });
 
-  const usable = !!(picked.pick && exact && !collected.nts);
+  // 純掃描頁讀不到任何文字，圖框比例自然也讀不到 —— 但那不是「沒有比例」，
+  // 是「讀不到」。兩者的處方完全不同，必須分開講。
+  if (page && page.kind === 'scan' && !collected.scales.length) {
+    evidence.push({
+      level: 'warn', kind: 'scan-noscale',
+      msg: '因為讀不到文字，圖框上就算寫了比例也抓不到。請人眼確認標題欄的比例尺欄位 ——'
+        + '台灣的標單圖很常寫「NO SCALE」，那種圖**不能量**，尺寸只能照圖上寫的數字讀。',
+    });
+  }
+
+  const usable = !!(picked.pick && exact && !collected.nts && (!page || page.measurable));
   return {
-    paper, exact, collected, picked, evidence,
+    paper, exact, collected, picked, evidence, page,
+    scan: !!(page && page.kind === 'scan'),
+    nts: collected.nts,
     ratio: picked.pick ? picked.pick.ratio : null,
     metersPerPoint: picked.pick ? metersPerPoint(picked.pick.ratio) : null,
     usable,
