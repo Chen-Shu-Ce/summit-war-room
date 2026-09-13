@@ -40,10 +40,63 @@ await page.evaluate(() => localStorage.clear());
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
 
+console.log('\n【0】解析中心（預設分頁）');
+ok('預設停在解析中心', await page.locator('#scanWrap.on').count() === 1);
+ok('尚未載入文件時不顯示解析結果', await page.locator('#scanResult[hidden]').count() === 1);
+ok('九大類分析範圍全部列出', await page.locator('#scopeBox label').count() === 10);
+
+await page.setInputFiles('#fileDoc', [join(FIX, 'fixture-spec.txt')]);
+await page.evaluate(() => { window.__takeoff.state.pendingUpKind = 'spec'; });
+await page.waitForTimeout(50);
+// 用 UI 的上傳按鈕路徑：先點類別，再塞檔
+for (const [kind, file] of [['spec', 'fixture-spec.txt'], ['equipment', 'fixture-equip.csv'],
+                            ['boq', 'fixture-boq.csv'], ['drawing', 'fixture-plan.txt'], ['drawing', 'fixture-system.txt']]) {
+  await page.evaluate((k) => { window.__takeoff.state.pendingUpKind = k; }, kind);
+  await page.setInputFiles('#fileDoc', join(FIX, file));
+  await page.waitForFunction((n) => window.__takeoff.state.docs.some((d) => d.name === n), file);
+}
+const docCount = await page.evaluate(() => window.__takeoff.state.docs.length);
+ok('五份文件已載入', docCount >= 5, '共 ' + docCount);
+const sheetGuess = await page.evaluate(() => {
+  const d = window.__takeoff.state.docs;
+  return { plan: (d.find((x) => x.name.includes('plan')) || {}).sheetType, sys: (d.find((x) => x.name.includes('system')) || {}).sheetType };
+});
+ok('由檔名猜出平面圖／系統圖', sheetGuess.plan === 'plan' && sheetGuess.sys === 'system', JSON.stringify(sheetGuess));
+const boqApplied = await page.evaluate(() => window.__takeoff.state.itemByCode.get('321.01').qty.boq);
+ok('BOQ CSV 已套用到工項', boqApplied === 1650, String(boqApplied));
+
+await page.locator('#btnAnalyze').click();
+await page.waitForSelector('#scanResult:not([hidden])');
+ok('九項指標全部渲染', await page.locator('#stats .stat').count() === 9);
+const compTxt = (await page.locator('[data-stat="completeness"] .v').innerText()).trim();
+ok('圖說完整性是算出來的百分比', /^\d{1,3}$/.test(compTxt) && +compTxt > 0 && +compTxt < 100, compTxt);
+await page.locator('[data-stat="completeness"]').click();
+await page.waitForSelector('#dlg[open]');
+const compRows = await page.locator('#dlgBody table.fac tbody tr').count();
+ok('完整性可攤開五項權重', compRows === 6, '列數 ' + compRows);
+await page.locator('#dlgFoot button').last().click();
+
+const rfiN = await page.evaluate(() => window.__takeoff.state.analysis.metrics.rfis.length);
+ok('偵測到 RFI 候選', rfiN > 0, '共 ' + rfiN);
+const types = await page.evaluate(() => [...new Set(window.__takeoff.state.analysis.metrics.rfis.map((r) => r.type))]);
+ok('抓到圖說≠規範（SUS304 vs SUS316）', types.includes('drawing-vs-spec'), types.join(','));
+ok('抓到平面圖≠系統圖（MCC 3 vs 2）', types.includes('plan-vs-system'), types.join(','));
+ok('抓到圖說≠BOQ', types.includes('drawing-vs-boq'), types.join(','));
+ok('抓到數量無法判斷', types.includes('qty-undeterminable'), types.join(','));
+ok('抓到規格不完整', types.includes('spec-incomplete'), types.join(','));
+const firstRfi = await page.locator('.rfi').first().innerText();
+ok('RFI 卡片含編號與證據', /RFI-001/.test(firstRfi) && firstRfi.includes('建議發問對象'), firstRfi.replace(/\s+/g, ' ').slice(0, 110));
+const rfiDl = page.waitForEvent('download');
+await page.locator('#btnRfiCsv').click();
+const rfiCsv = await readFile(await (await rfiDl).path(), 'utf8');
+ok('RFI CSV 含問題內容與證據欄', rfiCsv.includes('問題內容') && rfiCsv.includes('證據'));
+
+await page.locator('#tabList').click();
+
 console.log('\n【1】版面與初始資料');
 ok('WBS 樹有節點', await page.locator('#tree .node').count() > 5);
 ok('BOM 表格有列', await page.locator('#boqBody tr[data-code]').count() > 10);
-const cable = page.locator('tr[data-code="26.05.19.010"]');
+const cable = page.locator('tr[data-code="321.01"]');
 ok('附件一工項存在', await cable.count() === 1);
 const sug = (await cable.locator('td.sug').innerText()).trim();
 ok('建議採購量 = 1,751 M', sug.startsWith('1,751'), sug);
@@ -53,37 +106,37 @@ const band = (await cable.locator('[data-conf]').innerText()).trim();
 ok('可信度顯示等級與分數', /^A \d+/.test(band), band);
 
 console.log('\n【2】WBS 父子連動多選');
-await page.locator('#tree input[data-node="26"]').check();
+await page.locator('#tree input[data-node="300"]').check();
 const selAfter = await page.evaluate(() => window.__takeoff.state.selected.size);
-ok('勾選父節點會帶入所有子孫工項', selAfter === 8, '選到 ' + selAfter);
+ok('勾選父節點會帶入所有子孫工項', selAfter === 10, '選到 ' + selAfter);
 const indet = await page.evaluate(() => {
-  const cb = document.querySelector('#tree input[data-node="26.05"]');
+  const cb = document.querySelector('#tree input[data-node="320"]');
   return cb ? cb.checked : null;
 });
 ok('子節點同步為勾選', indet === true);
-await page.locator('tr[data-code="26.05.19.010"] input[data-pick]').uncheck();
-const half = await page.evaluate(() => document.querySelector('#tree input[data-node="26"]').indeterminate);
+await page.locator('tr[data-code="321.01"] input[data-pick]').uncheck();
+const half = await page.evaluate(() => document.querySelector('#tree input[data-node="300"]').indeterminate);
 ok('取消單項後父節點呈半選', half === true);
-await page.locator('tr[data-code="26.05.19.010"] input[data-pick]').check();
+await page.locator('tr[data-code="321.01"] input[data-pick]').check();
 
 console.log('\n【3】差異超標會鎖定並擋下轉採購');
-const cat6 = page.locator('tr[data-code="27.15.010"]');
+const cat6 = page.locator('tr[data-code="710.01"]');
 ok('Cat.6A 差異 11.9% 被鎖定', (await cat6.innerText()).includes('鎖定'));
 ok('鎖定項目無建議採購量', (await cat6.locator('td.sug').innerText()).trim() === '—');
 
 console.log('\n【4】人工確認流程');
-await page.locator('tr[data-code="27.15.010"] [data-src]').click();
+await page.locator('tr[data-code="710.01"] [data-src]').click();
 await page.waitForSelector('#dlg[open]');
 await page.fill('#dlgBody input[data-q="manual"]', '5600');
 await page.fill('#mBy', '電氣工程師');
 await page.fill('#mNote', '現場複核含機櫃內佈線');
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForSelector('#dlg[open]', { state: 'hidden' });
-const cat6b = (await page.locator('tr[data-code="27.15.010"]').innerText());
+const cat6b = (await page.locator('tr[data-code="710.01"]').innerText());
 ok('人工確認後解除鎖定', !cat6b.includes('鎖定'), cat6b.replace(/\s+/g, ' ').slice(0, 120));
-const sug2 = (await page.locator('tr[data-code="27.15.010"] td.sug').innerText()).trim();
+const sug2 = (await page.locator('tr[data-code="710.01"] td.sug').innerText()).trim();
 ok('5600 × 1.08 = 6,048 M', sug2.startsWith('6,048'), sug2);
-const order2 = (await page.locator('tr[data-code="27.15.010"] td').nth(10).innerText()).trim();
+const order2 = (await page.locator('tr[data-code="710.01"] td').nth(10).innerText()).trim();
 ok('305M/箱 → 20 箱', order2.startsWith('20 箱'), order2);
 
 console.log('\n【5】DXF 載入與圖層自動抓量');
@@ -98,14 +151,14 @@ const mapped = await page.evaluate(() => {
   const sels = [...document.querySelectorAll('#dlgBody [data-map]')];
   return sels.map((s) => [s.parentElement.querySelector('.lname').textContent, s.value]);
 });
-ok('E-CABLE-PWR 自動猜到電纜工項', mapped.some(([l, v]) => l === 'E-CABLE-PWR' && v.startsWith('26.05.19')), JSON.stringify(mapped));
-ok('E-LITE 自動猜到照明工項', mapped.some(([l, v]) => l === 'E-LITE' && v.startsWith('26.51')), JSON.stringify(mapped));
+ok('E-CABLE-PWR 自動猜到電纜工項', mapped.some(([l, v]) => l === 'E-CABLE-PWR' && v.startsWith('321.')), JSON.stringify(mapped));
+ok('E-LITE 自動猜到照明工項', mapped.some(([l, v]) => l === 'E-LITE' && v.startsWith('331.')), JSON.stringify(mapped));
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForTimeout(200);
 const drawQty = await page.evaluate(() => {
   const s = window.__takeoff.state;
-  const cable = s.itemByCode.get('26.05.19.010');
-  const lite = s.itemByCode.get('26.51.010');
+  const cable = s.itemByCode.get('321.01');
+  const lite = s.itemByCode.get('331.01');
   return { cable: cable.qty.drawing, cableSrc: cable.drawingSource, lite: lite.qty.drawing, prov: cable.provenance };
 });
 // 電纜圖層 = 5000 + π/2·1000 + π·1000 mm = 9.712m
@@ -149,12 +202,12 @@ ok('量得 15 M（吸附後誤差 <1%）', mval != null && Math.abs(mval - 15) /
 // 指派到工項
 await page.locator('#mlist [data-assign]').last().click();
 await page.waitForSelector('#dlg[open]');
-await page.selectOption('#asItem', '22.11.010');
+await page.selectOption('#asItem', '410.01');
 await page.selectOption('#asMode', 'set');
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForTimeout(150);
 const assigned = await page.evaluate(() => {
-  const it = window.__takeoff.state.itemByCode.get('22.11.010');
+  const it = window.__takeoff.state.itemByCode.get('410.01');
   return { q: it.qty.drawing, src: it.drawingSource, cal: it.calibration, prov: it.provenance && it.provenance.kind };
 });
 ok('量測值寫入圖面量', Math.abs(assigned.q - 15) / 15 < 0.01, JSON.stringify(assigned));
@@ -164,12 +217,12 @@ console.log('\n【7】採購包與匯出');
 await page.locator('#tabList').click();
 await page.evaluate(() => {
   const s = window.__takeoff.state;
-  s.selected = new Set(['26.05.19.010', '26.05.33.010', '26.24.010']);
+  s.selected = new Set(['321.01', '320.01', '310.01']);
 });
 await page.locator('#btnRmSel').click();      // 觸發重繪
 await page.evaluate(() => {
   const s = window.__takeoff.state;
-  s.selected = new Set(['26.05.19.010', '26.05.33.010', '26.24.010']);
+  s.selected = new Set(['321.01', '320.01', '310.01']);
   document.querySelector('#btnToPkg').click();
 });
 await page.waitForSelector('#dlg[open]');
@@ -190,11 +243,11 @@ ok('CSV 含表頭與稽核欄', csv.includes('正式採購基準') && csv.includ
 ok('CSV 含 1751 建議採購量', csv.includes('1751'), csv.split('\n')[1] || '');
 
 console.log('\n【7b】合約型態與計價影響');
-const payTxt = await page.locator('tr[data-code="23.21.010"] .pay').innerText();
+const payTxt = await page.locator('tr[data-code="620.01"] .pay').innerText();
 ok('實作實算下標示可計價增量', payTxt.includes('可計價增量'), payTxt);
-const payNote = await page.locator('tr[data-code="23.21.010"] .pay').getAttribute('title');
+const payNote = await page.locator('tr[data-code="620.01"] .pay').getAttribute('title');
 ok('滑鼠提示帶出估驗計量說明', /實作實算/.test(payNote), String(payNote).slice(0, 60));
-const payDown = await page.locator('tr[data-code="22.13.010"] .pay').innerText();
+const payDown = await page.locator('tr[data-code="420.01"] .pay').innerText();
 ok('實作量低於標單標示計價減量', payDown.includes('計價減量'), payDown);
 await page.locator('#btnSettings').click();
 await page.waitForSelector('#dlg[open]');
@@ -203,7 +256,7 @@ ok('參數頁預設實作實算', await page.inputValue('#sContract') === 'remea
 await page.selectOption('#sContract', 'lumpsum');
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForTimeout(150);
-const payLump = await page.locator('tr[data-code="23.21.010"] .pay').innerText();
+const payLump = await page.locator('tr[data-code="620.01"] .pay').innerText();
 ok('切成總價承攬後改標自行吸收風險', payLump.includes('自行吸收'), payLump);
 await page.locator('#btnSettings').click();
 await page.waitForSelector('#dlg[open]');
@@ -213,7 +266,7 @@ await page.waitForTimeout(150);
 
 console.log('\n【7c】自動建議拆包');
 await page.evaluate(() => {
-  window.__takeoff.state.selected = new Set(['26.05.19.010', '26.05.33.010', '26.24.010', '22.13.010', '23.21.010']);
+  window.__takeoff.state.selected = new Set(['321.01', '320.01', '310.01', '420.01', '620.01']);
 });
 await page.locator('#btnAutoPkg').click();
 await page.waitForSelector('#dlg[open]');
@@ -234,8 +287,8 @@ await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
 const after = await page.evaluate(() => ({
   pkgs: window.__takeoff.state.packages.length,
-  manual: window.__takeoff.state.itemByCode.get('27.15.010').qty.manual,
-  draw: window.__takeoff.state.itemByCode.get('26.05.19.010').qty.drawing,
+  manual: window.__takeoff.state.itemByCode.get('710.01').qty.manual,
+  draw: window.__takeoff.state.itemByCode.get('321.01').qty.drawing,
 }));
 ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預期 ${pkgTotal}`);
 ok('人工確認持久化', after.manual === 5600);

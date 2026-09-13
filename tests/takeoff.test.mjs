@@ -236,3 +236,149 @@ test('自動拆包：指定供應商的品項自成一包', () => {
   assert.equal(withVendor.length, 1);
   assert.deepEqual(withVendor[0].itemCodes, ['B']);
 });
+
+/* ── 圖說解析：規格屬性與 RFI 引擎 ── */
+import * as A from '../public/js/takeoff/analysis.js';
+
+test('規格屬性抽取：材質／尺寸／等級／標準', () => {
+  const a = A.specAttrs('SUS304 φ50 Sch10 CNS 13392');
+  assert.deepEqual(a.material, ['SUS304']);
+  assert.ok(a.size.includes('Φ50'), JSON.stringify(a.size));
+  assert.ok(a.grade.some((g) => g.includes('SCH10')), JSON.stringify(a.grade));
+  assert.ok(a.standard.some((s) => s.startsWith('CNS')), JSON.stringify(a.standard));
+});
+
+test('規格完整性：材料類需材質＋尺寸＋標準', () => {
+  const full = { measureType: 'length', name: '不鏽鋼給水管', spec: 'SUS304 φ50 Sch10 CNS 13392' };
+  const thin = { measureType: 'length', name: '水管', spec: 'φ50' };
+  assert.equal(A.specCompleteness(full).ok, true);
+  const r = A.specCompleteness(thin);
+  assert.equal(r.ok, false);
+  assert.ok(r.missing.includes('material') && r.missing.includes('standard'), JSON.stringify(r.missing));
+});
+
+test('統包項（式）不判規格完整性', () => {
+  assert.equal(A.specCompleteness({ measureType: 'lumpsum', spec: 'TAB 含報告書' }).ok, true);
+});
+
+test('標籤計數：MCC-1、MCC-2 算兩個實例', () => {
+  const r = A.countTag('平面圖標示 MCC-1 與 MCC-2，另有 MCC-1 重覆標註', 'MCC');
+  assert.equal(r.count, 2);
+  assert.deepEqual(r.instances.sort(), ['MCC-1', 'MCC-2']);
+});
+
+const RFI_ITEMS = [
+  { code: '410.01', wbs: '410', name: '不鏽鋼給水管', spec: 'SUS304 φ50 Sch10 CNS 13392', unit: 'M',
+    measureType: 'length', qty: { drawing: 620, boq: 600 }, drawingSource: 'measure', coverage: 'full' },
+  { code: '310.01', wbs: '310', name: '低壓配電盤 MCC', spec: '480V 3P4W 800A IP54 CNS 3990', unit: '台',
+    measureType: 'count', equipTag: 'MCC', qty: { drawing: 6, boq: 6 }, drawingSource: 'auto', coverage: 'full' },
+  { code: '710.01', wbs: '710', name: 'Cat.6A UTP 網路線', spec: '4P 23AWG LSZH TIA-568-C.2', unit: 'M',
+    measureType: 'length', qty: { drawing: 5820, boq: 5200 }, drawingSource: 'auto', coverage: 'partial' },
+  { code: '810.01', wbs: '810', name: '不鏽鋼工作檯', spec: '', unit: '台',
+    measureType: 'count', qty: {}, coverage: 'none' },
+];
+
+const RFI_DOCS = [
+  { id: 'd1', kind: 'drawing', sheetType: 'plan', name: 'E-P-01 電氣平面圖', scaleSet: true,
+    text: '電氣平面圖\nMCC-1 位於 B1 機房\nMCC-2 位於 1F 機房\nMCC-3 位於 2F 機房' },
+  { id: 'd2', kind: 'drawing', sheetType: 'system', name: 'E-S-01 電氣單線系統圖', scaleSet: false,
+    text: '單線系統圖\nMCC-1\nMCC-2' },
+  { id: 'd3', kind: 'spec', name: '機電工程規範.pdf',
+    text: '第 22 節 給水管路\n不鏽鋼給水管 應採用 SUS316 φ50 Sch10，符合 CNS 13392。\n第 26 節 配電盤' },
+  { id: 'd4', kind: 'equipment', name: '設備表.csv', text: 'TAG,名稱\nMCC-1,配電盤\nMCC-2,配電盤\nMCC-3,配電盤' },
+];
+
+const CTX = { items: RFI_ITEMS, docs: RFI_DOCS, settings: { varianceWarn: 0.05, varianceStop: 0.10 } };
+
+test('RFI：圖說 ≠ BOQ（差異超過容忍）', () => {
+  const r = A.detectRfi(CTX).filter((x) => x.type === 'drawing-vs-boq');
+  assert.equal(r.length, 1);
+  assert.equal(r[0].itemCode, '710.01');
+  assert.equal(r[0].severity, 'high');            // 11.9% > 10%
+  assert.ok(r[0].evidence.length >= 3);
+});
+
+test('RFI：圖說 ≠ 規範（SUS304 對上規範的 SUS316）', () => {
+  const r = A.detectRfi(CTX).filter((x) => x.type === 'drawing-vs-spec');
+  assert.equal(r.length, 1);
+  assert.equal(r[0].itemCode, '410.01');
+  assert.match(r[0].question, /SUS316/);
+  assert.match(r[0].question, /機電工程規範/);
+});
+
+test('RFI：平面圖 3 處 vs 系統圖 2 處', () => {
+  const r = A.detectRfi(CTX).filter((x) => x.type === 'plan-vs-system');
+  assert.equal(r.length, 1);
+  assert.match(r[0].title, /平面圖 3 處、系統圖 2 處/);
+});
+
+test('RFI：數量無法判斷與規格不完整', () => {
+  const all = A.detectRfi(CTX);
+  const q = all.filter((x) => x.type === 'qty-undeterminable');
+  assert.equal(q.length, 1);
+  assert.equal(q[0].itemCode, '810.01');
+  assert.equal(q[0].severity, 'high');
+  const sp = all.filter((x) => x.type === 'spec-incomplete');
+  assert.ok(sp.some((x) => x.itemCode === '810.01'), '空白規格應被抓出');
+});
+
+test('RFI：依嚴重度排序並給連續編號', () => {
+  const all = A.detectRfi(CTX);
+  assert.equal(all[0].code, 'RFI-001');
+  const sev = all.map((r) => r.severity);
+  const rank = { high: 0, med: 1, low: 2 };
+  for (let i = 1; i < sev.length; i++) assert.ok(rank[sev[i - 1]] <= rank[sev[i]], sev.join(','));
+  assert.ok(all.every((r) => r.askTo));
+});
+
+test('分析範圍過濾：只看 400 大類', () => {
+  const r = A.detectRfi({ ...CTX, scope: ['400'] });
+  assert.ok(r.every((x) => String(x.wbs).startsWith('4')), JSON.stringify(r.map((x) => x.wbs)));
+});
+
+test('九項指標：全部由實際資料算出', () => {
+  const m = A.metrics(CTX);
+  assert.equal(m.itemCount, 4);
+  assert.equal(m.wbsCount, 4);
+  assert.equal(m.qtyConfirmed, 2);          // 710.01 差異 11.9% 被鎖定、810.01 完全無數量
+  assert.equal(m.varianceCount, 1);
+  assert.ok(m.rfiCount >= 4);
+  assert.equal(m.longLeadCount, 0);
+});
+
+test('圖說完整性：五項加權且可攤開', () => {
+  const m = A.metrics(CTX);
+  const c = m.completeness;
+  assert.ok(c.value > 0 && c.value < 1, String(c.value));
+  assert.equal(c.parts.length, 5);
+  assert.ok(Math.abs(c.parts.reduce((a, p) => a + p.weight, 0) - 1) < 1e-9, '權重必須合計為 1');
+  const scale = c.parts.find((p) => p.key === 'scale');
+  assert.equal(scale.score, 0.5);           // 兩份圖面只有一份設了比例
+});
+
+test('圖說完整性：沒有任何資料時不會憑空生出百分比', () => {
+  const c = A.completeness({ items: [], docs: [] }, []);
+  assert.equal(c.value, 0);
+});
+
+test('規範衝突：泛稱（不鏽鋼）不得用來認定衝突，也不得掩蓋真衝突', () => {
+  const item = { name: '不鏽鋼給水管', spec: 'SUS304 φ50' };
+  const same = { name: 'x', text: '不鏽鋼給水管 採用 SUS304 φ50' };
+  const diff = { name: 'y', text: '不鏽鋼給水管 應採用 SUS316 φ50' };
+  const vague = { name: 'z', text: '不鏽鋼給水管 依圖施作' };
+  assert.equal(A.specConflict(item, same), null, '同材質不應報衝突');
+  assert.ok(A.specConflict(item, diff), 'SUS304 vs SUS316 必須報衝突');
+  assert.equal(A.specConflict(item, vague), null, '規範沒寫具體材質時不得宣稱衝突');
+});
+
+test('規格完整性：混凝土以強度為規格，不得要求材質尺寸而生出假 RFI', () => {
+  const conc = { measureType: 'volume', name: '結構混凝土', spec: "f'c=280 kgf/cm² 泵送 CNS 3090" };
+  assert.equal(A.specCompleteness(conc).ok, true, JSON.stringify(A.specCompleteness(conc).missing));
+  const rebar = { measureType: 'weight', name: '竹節鋼筋', spec: 'SD420W #8 (D25) CNS 560' };
+  assert.equal(A.specCompleteness(rebar).ok, true, JSON.stringify(A.specCompleteness(rebar).missing));
+});
+
+test('規格完整性：工項可自訂必要屬性', () => {
+  const it = { measureType: 'length', spec: 'φ50', requiredSpec: ['size'] };
+  assert.equal(A.specCompleteness(it).ok, true);
+});

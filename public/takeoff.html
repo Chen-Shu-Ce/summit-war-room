@@ -115,8 +115,43 @@ td.sug{font-weight:700}
 /* ── 圖面面板 ── */
 .viewwrap{display:none;flex-direction:column;min-height:0;flex:1}
 .viewwrap.on{display:flex}
-.tablewrap{display:flex;flex-direction:column;min-height:0;flex:1}
-.tablewrap.off{display:none}
+.tablewrap{display:none;flex-direction:column;min-height:0;flex:1}
+.tablewrap.on{display:flex}
+.scanwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.scanwrap.on{display:flex}
+.scanhead{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.sech{font-size:12px;font-weight:700;letter-spacing:.4px;color:var(--ink2);margin:18px 0 7px;display:flex;align-items:center}
+.upbar{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.doclist{margin-top:9px;display:grid;gap:6px}
+.docrow{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 9px;flex-wrap:wrap}
+.docrow .dn{flex:1;min-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docrow select{width:auto;min-width:96px}
+.scopebox{display:flex;gap:8px;flex-wrap:wrap}
+.scopebox label{display:flex;gap:5px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 11px;cursor:pointer}
+.scopebox label.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.scopebox input{width:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:9px}
+.stat{border:1px solid var(--line);border-radius:10px;padding:9px 11px;cursor:pointer;background:var(--panel)}
+.stat:hover{border-color:var(--accent)}
+.stat .k{display:block;background:none;font-size:11px;color:var(--ink3);padding:0;margin-bottom:3px}
+.stat .v{font-family:var(--mono);font-size:21px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat .u{font-size:11px;color:var(--ink3);margin-left:3px}
+.stat.warn .v{color:var(--warn)} .stat.bad .v{color:var(--bad)} .stat.ok .v{color:var(--ok)}
+.bar{height:5px;border-radius:3px;background:var(--line2);margin-top:6px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent)}
+.stages{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.stage{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--ink3)}
+.stage.done{border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+.stage.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-bg)}
+.stage .arrow{color:var(--ink3)}
+.rfi{border:1px solid var(--line);border-left-width:3px;border-radius:9px;padding:8px 11px;margin-bottom:7px}
+.rfi.high{border-left-color:var(--bad)} .rfi.med{border-left-color:var(--warn)} .rfi.low{border-left-color:var(--ink3)}
+.rfi h4{margin:0 0 3px;font-size:13px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.rfi p{margin:4px 0 0;font-size:12px;color:var(--ink2)}
+.rfi table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px}
+.rfi td{padding:2px 6px;border-top:1px solid var(--line2);vertical-align:top}
+.rfi td:first-child{color:var(--ink3);width:74px;white-space:nowrap}
+.rfi td:last-child{color:var(--ink3);width:150px;text-align:right}
 .toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 #cv{flex:1;min-height:220px;width:100%;display:block;background:var(--paper);touch-action:none}
 .viewfoot{display:flex;gap:10px;align-items:center;padding:5px 10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
@@ -191,10 +226,55 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
       <h2>
         <span id="midTitle">工程量清單 (BOM)</span>
         <div class="seg" style="margin-left:auto">
-          <button id="tabList" aria-pressed="true">清單</button>
+          <button id="tabScan" aria-pressed="true">解析中心</button>
+          <button id="tabList" aria-pressed="false">清單</button>
           <button id="tabView" aria-pressed="false">圖面量測</button>
         </div>
       </h2>
+
+      <!-- 解析中心 -->
+      <div class="scanwrap on" id="scanWrap">
+        <div class="scroll" style="padding:14px 16px">
+          <div class="scanhead">
+            <div style="flex:1;min-width:200px">
+              <label class="f">Project</label>
+              <input type="text" id="projName" placeholder="專案名稱" value="未命名專案">
+            </div>
+            <div style="min-width:170px">
+              <label class="f">合約型態</label>
+              <select id="projContract"><option value="remeasure">實作實算</option><option value="lumpsum">總價承攬</option></select>
+            </div>
+          </div>
+
+          <h3 class="sech">上傳文件</h3>
+          <div class="upbar" id="upBar">
+            <button class="btn" data-up="drawing">＋ 圖說</button>
+            <button class="btn" data-up="spec">＋ 規範</button>
+            <button class="btn" data-up="boq">＋ BOQ</button>
+            <button class="btn" data-up="equipment">＋ 設備表</button>
+            <span class="hint">也可以直接把檔案拖進視窗</span>
+          </div>
+          <div id="docList" class="doclist"></div>
+
+          <h3 class="sech">分析範圍</h3>
+          <div id="scopeBox" class="scopebox"></div>
+
+          <div style="margin:14px 0 4px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+            <button class="btn primary" id="btnAnalyze">開始解析</button>
+            <span class="hint" id="analyzeHint">解析只用已載入文件的實際內容，不會替你猜任何數字。</span>
+          </div>
+
+          <div id="scanResult" hidden>
+            <h3 class="sech">解析結果</h3>
+            <div class="stats" id="stats"></div>
+            <h3 class="sech">流程階段</h3>
+            <div class="stages" id="stages"></div>
+            <h3 class="sech">RFI 候選 <span class="chip" id="rfiCount">0</span>
+              <button class="btn sm" id="btnRfiCsv" style="margin-left:8px">匯出 RFI CSV</button></h3>
+            <div id="rfiList"></div>
+          </div>
+        </div>
+      </div>
 
       <div class="tablewrap" id="tableWrap">
         <div class="midbar">
@@ -274,6 +354,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
 <input type="file" id="fileDrawing" accept=".dxf,.dwg,.pdf,application/pdf" hidden>
 <input type="file" id="fileBoq" accept=".csv,text/csv" hidden>
 <input type="file" id="fileProject" accept=".json,application/json" hidden>
+<input type="file" id="fileDoc" multiple hidden>
 
 <dialog id="dlg"><h3 id="dlgTitle">—</h3><div class="dbody" id="dlgBody"></div><footer id="dlgFoot"></footer></dialog>
 

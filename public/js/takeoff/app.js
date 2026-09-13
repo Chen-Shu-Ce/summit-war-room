@@ -8,6 +8,7 @@
 import * as Q from './quantity.js';
 import * as DXF from './dxf.js';
 import { Viewer, TOOLS } from './viewer.js';
+import * as A from './analysis.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -31,6 +32,11 @@ const state = {
   viewer: null,
   lastRowIndex: null,
   shiftDown: false,
+  projName: '未命名專案',
+  docs: [],            // 已載入文件（圖說／規範／BOQ／設備表）
+  scope: [],           // 分析範圍：大類代碼，空 = 全工程
+  analysis: null,      // 最近一次解析結果
+  pendingUpKind: 'drawing',
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -84,6 +90,13 @@ function persist() {
         packageId: i.packageId, closed: i.closed,
       })),
       selected: [...state.selected], packages: state.packages, settings: state.settings,
+      projName: state.projName, scope: state.scope,
+      // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
+      docs: state.docs.map((d) => ({
+        id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
+        entities: d.entities, rows: d.rows, scaleSet: d.scaleSet, error: d.error, applied: d.applied,
+        text: (d.text || '').slice(0, 120000),
+      })),
     }));
   } catch (e) { console.warn('無法寫入 localStorage', e); }
 }
@@ -101,6 +114,9 @@ function restore() {
     state.selected = new Set(d.selected || []);
     state.packages = d.packages || [];
     state.settings = { ...state.settings, ...(d.settings || {}) };
+    state.projName = d.projName || state.projName;
+    state.scope = d.scope || [];
+    state.docs = (d.docs || []).map((x) => ({ ...x, restored: true }));
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -296,7 +312,17 @@ function renderPkgs() {
   }).join('');
 }
 
-function renderAll() { renderTree(); renderTable(); renderCart(); renderPkgs(); persist(); }
+function renderAll() {
+  renderTree(); renderTable(); renderCart(); renderPkgs(); renderDocs(); renderScope();
+  const pc = $('#projContract'); if (pc) pc.value = state.settings.contractType || 'remeasure';
+  const pn = $('#projName'); if (pn && pn.value !== state.projName) pn.value = state.projName;
+  if (state.analysis) {                       // 資料變了就重算，不讓畫面停在舊結論
+    const m = A.metrics(analysisCtx());
+    state.analysis.metrics = m;
+    renderStats(m); renderStages(m); renderRfi(m.rfis);
+  }
+  persist();
+}
 
 /* ══════════ 事件 ══════════ */
 
@@ -385,8 +411,47 @@ function wire() {
   $('#btnHelp').onclick = openHelp;
 
   // 分頁（中欄清單 / 圖面）
+  $('#tabScan').onclick = () => setMidTab('scan');
   $('#tabList').onclick = () => setMidTab('list');
   $('#tabView').onclick = () => setMidTab('view');
+
+  // 解析中心
+  $('#projName').oninput = (e) => { state.projName = e.target.value; persist(); };
+  $('#projContract').onchange = (e) => { state.settings.contractType = e.target.value; renderAll(); };
+  $('#upBar').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-up]'); if (!b) return;
+    state.pendingUpKind = b.dataset.up;
+    const inp = $('#fileDoc');
+    inp.accept = A.DOC_KINDS[state.pendingUpKind].accept;
+    inp.click();
+  });
+  $('#fileDoc').onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    for (const f of files) await ingestDoc(f, state.pendingUpKind);
+  };
+  $('#docList').addEventListener('click', (e) => {
+    const d = e.target.closest('[data-docdel]');
+    if (d) { state.docs = state.docs.filter((x) => x.id !== d.dataset.docdel); renderDocs(); persist(); }
+    const o = e.target.closest('[data-docopen]');
+    if (o) openDocInViewer(o.dataset.docopen);
+  });
+  $('#docList').addEventListener('change', (e) => {
+    const sel = e.target.closest('[data-docsheet]');
+    if (!sel) return;
+    const doc = state.docs.find((x) => x.id === sel.dataset.docsheet);
+    if (doc) { doc.sheetType = sel.value; persist(); }
+  });
+  $('#scopeBox').addEventListener('change', onScopeChange);
+  $('#btnAnalyze').onclick = runAnalysis;
+  $('#btnRfiCsv').onclick = exportRfiCsv;
+  $('#stats').addEventListener('click', (e) => {
+    const c = e.target.closest('[data-stat]'); if (c) onStatClick(c.dataset.stat);
+  });
+  $('#rfiList').addEventListener('click', (e) => {
+    const g = e.target.closest('[data-rfigo]');
+    if (g) { state.search = g.dataset.rfigo; $('#treeSearch').value = g.dataset.rfigo; state.activeNode = null; renderTree(); renderTable(); setMidTab('list'); }
+  });
 
   // 窄螢幕欄位切換
   $$('.tabbar [data-tab]').forEach((b) => b.onclick = () => {
@@ -416,8 +481,14 @@ function wire() {
   document.addEventListener('dragover', (e) => { e.preventDefault(); });
   document.addEventListener('drop', (e) => {
     e.preventDefault();
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) /\.(csv)$/i.test(f.name) ? importBoqCsv(f) : /\.json$/i.test(f.name) ? importProject(f) : loadDrawing(f);
+    const files = [...(e.dataTransfer.files || [])];
+    for (const f of files) {
+      if (/\.json$/i.test(f.name)) importProject(f);
+      else if (/\.(dxf|dwg)$/i.test(f.name)) ingestDoc(f, 'drawing');
+      else if (/\.pdf$/i.test(f.name)) ingestDoc(f, 'drawing');
+      else if (/\.csv$/i.test(f.name)) ingestDoc(f, 'boq');
+      else ingestDoc(f, 'spec');
+    }
   });
 
   window.addEventListener('resize', () => state.viewer && state.viewer.resize());
@@ -430,12 +501,12 @@ function rangeSelect(a, b, on) {
 }
 
 function setMidTab(t) {
-  const isView = t === 'view';
-  $('#tabList').setAttribute('aria-pressed', String(!isView));
-  $('#tabView').setAttribute('aria-pressed', String(isView));
-  $('#tableWrap').classList.toggle('off', isView);
-  $('#viewWrap').classList.toggle('on', isView);
-  if (isView) requestAnimationFrame(() => { state.viewer.resize(); state.viewer.fit(); });
+  const tabs = { scan: '#tabScan', list: '#tabList', view: '#tabView' };
+  Object.entries(tabs).forEach(([k, sel]) => $(sel).setAttribute('aria-pressed', String(k === t)));
+  $('#scanWrap').classList.toggle('on', t === 'scan');
+  $('#tableWrap').classList.toggle('on', t === 'list');
+  $('#viewWrap').classList.toggle('on', t === 'view');
+  if (t === 'view') requestAnimationFrame(() => { state.viewer.resize(); state.viewer.fit(); });
 }
 
 /* ══════════ 圖面載入 ══════════ */
@@ -1183,6 +1254,307 @@ function parseCsv(text) {
   }
   if (cur !== '' || row.length) { row.push(cur); out.push(row); }
   return out.filter((r) => r.some((c) => String(c).trim() !== ''));
+}
+
+
+/* ══════════ 解析中心 ══════════ */
+
+const SCOPE_TOPS = () => state.nodes.filter((n) => !n.parent);
+
+function renderScope() {
+  const box = $('#scopeBox');
+  const all = state.scope.length === 0;
+  box.innerHTML = `<label class="${all ? 'on' : ''}"><input type="checkbox" data-scope="__all" ${all ? 'checked' : ''}> 全工程</label>`
+    + SCOPE_TOPS().map((n) => {
+      const on = state.scope.includes(n.code);
+      return `<label class="${on ? 'on' : ''}"><input type="checkbox" data-scope="${esc(n.code)}" ${on ? 'checked' : ''}> ${esc(n.code)} ${esc(n.name)}</label>`;
+    }).join('');
+}
+
+function onScopeChange(e) {
+  const cb = e.target.closest('[data-scope]');
+  if (!cb) return;
+  if (cb.dataset.scope === '__all') state.scope = [];
+  else {
+    const c = cb.dataset.scope;
+    if (cb.checked) state.scope = [...new Set([...state.scope, c])];
+    else state.scope = state.scope.filter((x) => x !== c);
+  }
+  renderScope(); persist();
+}
+
+function renderDocs() {
+  const host = $('#docList');
+  if (!state.docs.length) {
+    host.innerHTML = '<div class="hint">尚未載入任何文件。沒有文件就沒有解析結果 —— 這個工具不會憑空生出百分比。</div>';
+    return;
+  }
+  host.innerHTML = state.docs.map((d) => {
+    const k = A.DOC_KINDS[d.kind];
+    const sheet = d.kind === 'drawing'
+      ? `<select data-docsheet="${esc(d.id)}">${Object.values(A.SHEET_TYPES).map((t) => `<option value="${t.key}" ${d.sheetType === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}</select>`
+      : '';
+    const stat = [
+      d.pages ? `${d.pages} 頁` : '',
+      d.entities ? `${d.entities} 實體` : '',
+      d.rows ? `${d.rows} 列` : '',
+      d.text ? `${Q.fmt(d.text.length)} 字` : '<span style="color:var(--warn)">無可讀文字</span>',
+      d.scaleSet ? '<span style="color:var(--ok)">已設比例</span>' : (d.kind === 'drawing' ? '<span style="color:var(--warn)">未設比例</span>' : ''),
+    ].filter(Boolean).join(' · ');
+    return `<div class="docrow">
+      <span class="chip acc">${esc(k ? k.label : d.kind)}</span>
+      <span class="dn" title="${esc(d.name)}">${esc(d.name)}</span>
+      ${sheet}
+      <span class="hint">${stat}</span>
+      ${d.viewable ? `<button class="btn sm" data-docopen="${esc(d.id)}">開啟量測</button>` : ''}
+      <button class="btn sm" data-docdel="${esc(d.id)}">移除</button>
+    </div>`;
+  }).join('');
+}
+
+/** 讀進一份文件並抽出可比對的文字。抽不到文字就照實標示，不假裝解析成功。 */
+async function ingestDoc(file, kind) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const id = 'd' + Math.random().toString(36).slice(2, 9);
+  const doc = { id, kind, name: file.name, sheetType: A.guessSheetType(file.name), at: new Date().toISOString(), text: '' };
+  $('#analyzeHint').textContent = `讀取 ${file.name}…`;
+  try {
+    if (ext === 'pdf') {
+      const r = await readPdf(file);
+      doc.text = r.text; doc.pages = r.pages;
+      if (kind === 'drawing') { doc.viewable = true; doc._file = file; }
+    } else if (ext === 'dxf' || ext === 'dwg') {
+      const parsed = ext === 'dxf' ? await parseDxfFile(file) : await convertAndParseDwg(file);
+      doc.text = dxfText(parsed);
+      doc.entities = parsed.entities.length;
+      doc.viewable = true; doc._doc = parsed; doc._file = file;
+      doc.scaleSet = !!(parsed.units && parsed.units.toM);
+    } else {
+      const text = await file.text();
+      doc.text = text;
+      doc.rows = text.split(/\r?\n/).filter((l) => l.trim()).length;
+      if (kind === 'boq') await applyBoqText(text, doc);
+    }
+  } catch (err) {
+    doc.error = err.message;
+    dialog('文件讀取失敗', `<p>${esc(file.name)}：${esc(err.message)}</p>
+      <p class="hint">仍會保留在清單中並標示為無法解析 —— 讓你看得到缺口，而不是安靜跳過。</p>`);
+  }
+  state.docs.push(doc);
+  renderDocs(); persist();
+  $('#analyzeHint').textContent = '已載入 ' + state.docs.length + ' 份文件，可以開始解析。';
+  return doc;
+}
+
+async function readPdf(file) {
+  const pdfjs = await loadPdfjs();
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const cap = Math.min(pdf.numPages, 80);
+  const chunks = [];
+  for (let i = 1; i <= cap; i++) {
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    let lastY = null; let line = [];
+    const lines = [];
+    for (const it of tc.items) {
+      const y = it.transform ? Math.round(it.transform[5]) : 0;
+      if (lastY !== null && Math.abs(y - lastY) > 2) { lines.push(line.join(' ')); line = []; }
+      line.push(it.str); lastY = y;
+    }
+    if (line.length) lines.push(line.join(' '));
+    chunks.push(`--- ${file.name} p.${i} ---\n` + lines.join('\n'));
+  }
+  return { text: chunks.join('\n'), pages: pdf.numPages, capped: cap < pdf.numPages };
+}
+
+let _pdfjs = null;
+async function loadPdfjs() {
+  if (_pdfjs) return _pdfjs;
+  const m = await import('../../vendor/pdfjs/pdf.min.mjs');
+  m.GlobalWorkerOptions.workerSrc = new URL('../../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+  _pdfjs = m;
+  return m;
+}
+
+async function parseDxfFile(file) {
+  const buf = await file.arrayBuffer();
+  if (DXF.isBinaryDxf(buf)) throw new Error('二進位 DXF，請在 CAD 另存為 ASCII DXF');
+  const doc = DXF.parseDxf(new TextDecoder('utf-8', { fatal: false }).decode(buf));
+  if (!doc.entities.length) throw new Error('DXF 中找不到可用實體');
+  return doc;
+}
+
+async function convertAndParseDwg(file) {
+  const endpoint = window.TAKEOFF_DWG_ENDPOINT || '/api/convert-dwg';
+  const r = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) },
+    body: await file.arrayBuffer(),
+  }).catch((e) => { throw new Error('轉檔服務無法連線：' + e.message); });
+  if (!r.ok) throw new Error(`DWG 轉檔服務回應 ${r.status}，請設定 DWG_CONVERT_URL 或改用 DXF／PDF`);
+  const doc = DXF.parseDxf(await r.text());
+  if (!doc.entities.length) throw new Error('轉檔結果沒有可用實體');
+  return doc;
+}
+
+/** DXF 的「文字」= 圖層名 + 文字實體 + 圖塊名，供標籤比對用。 */
+function dxfText(doc) {
+  const flat = DXF.flatten(doc);
+  const texts = flat.filter((e) => e.type === 'TEXT').map((e) => e.text);
+  const blocks = [...new Set(flat.filter((e) => e.type === 'INSERT').map((e) => e.name))];
+  const layers = [...new Set(flat.map((e) => e.layer))];
+  return `圖層：${layers.join(' ')}\n圖塊：${blocks.join(' ')}\n${texts.join('\n')}`;
+}
+
+async function applyBoqText(text, doc) {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return;
+  const head = rows[0].map((h) => h.trim().toLowerCase());
+  const find = (...keys) => head.findIndex((h) => keys.some((k) => h.includes(k)));
+  const ci = find('代碼', 'code', '項次'); const qi = find('boq', '數量', 'qty'); const pi = find('單價', 'price');
+  if (ci < 0 || qi < 0) { doc.warn = '無法辨識 BOQ 欄位（需要工項代碼與數量）'; return; }
+  let hit = 0;
+  for (const r of rows.slice(1)) {
+    const it = state.itemByCode.get((r[ci] || '').trim());
+    if (!it) continue;
+    const q = parseFloat(String(r[qi]).replace(/,/g, ''));
+    if (Number.isFinite(q)) { it.qty.boq = q; hit++; }
+    if (pi >= 0) { const p = parseFloat(String(r[pi]).replace(/,/g, '')); if (Number.isFinite(p)) it.unitPrice = p; }
+  }
+  doc.applied = hit;
+  renderAll();
+}
+
+async function openDocInViewer(id) {
+  const d = state.docs.find((x) => x.id === id);
+  if (!d) return;
+  setMidTab('view');
+  if (d._doc) {
+    state.drawing = { name: d.name, kind: 'dxf', doc: d._doc };
+    state.viewer.loadDxf(d._doc);
+    $('#drawName').textContent = `${d.name} · ${d._doc.entities.length} 實體 · 單位 ${d._doc.units.name}`;
+    $('#pageChip').hidden = true;
+  } else if (d._file) {
+    await loadPdfFile(d._file);
+  }
+  updateScaleChip(); renderMeasureList();
+  state.viewer.on('scale', () => { d.scaleSet = !!state.viewer.metersPerUnit; renderDocs(); });
+  d.scaleSet = !!state.viewer.metersPerUnit;
+  renderDocs();
+}
+
+function analysisCtx() {
+  return { items: state.items, docs: state.docs, settings: state.settings, scope: state.scope };
+}
+
+function runAnalysis() {
+  const ctx = analysisCtx();
+  if (!state.docs.length && !confirm('尚未載入任何文件。仍要只依現有工項資料解析嗎？')) return;
+  const m = A.metrics(ctx);
+  state.analysis = { at: new Date().toISOString(), metrics: m, scope: [...state.scope] };
+  $('#scanResult').hidden = false;
+  renderStats(m); renderStages(m); renderRfi(m.rfis);
+  persist();
+}
+
+function statCard(key, label, value, opts = {}) {
+  const cls = opts.level ? ' ' + opts.level : '';
+  return `<div class="stat${cls}" data-stat="${key}" title="${esc(opts.title || '點擊查看細節')}">
+    <span class="k">${esc(label)}</span>
+    <span class="v">${esc(String(value))}</span><span class="u">${esc(opts.unit || '')}</span>
+    ${opts.bar != null ? `<div class="bar"><i style="width:${Math.round(opts.bar * 100)}%"></i></div>` : ''}
+  </div>`;
+}
+
+function renderStats(m) {
+  const c = m.completeness;
+  const lvl = (n, warnAt, badAt) => (n >= badAt ? 'bad' : n >= warnAt ? 'warn' : '');
+  $('#stats').innerHTML = [
+    statCard('completeness', '圖說完整性', (c.value * 100).toFixed(0), { unit: '%', bar: c.value, level: c.value >= 0.85 ? 'ok' : c.value >= 0.6 ? 'warn' : 'bad', title: '點擊查看五項權重明細' }),
+    statCard('wbs', 'WBS', m.wbsCount, { unit: '項' }),
+    statCard('items', '工項', m.itemCount, { unit: '項' }),
+    statCard('material', '材料/設備', m.materialCount, { unit: '項' }),
+    statCard('confirmed', '數量已確認', m.qtyConfirmed, { unit: '項', level: m.qtyConfirmed === m.itemCount ? 'ok' : '' }),
+    statCard('special', '特殊規格', m.specialCount, { unit: '項', level: m.specialCount ? 'warn' : '' }),
+    statCard('variance', '差異', m.varianceCount, { unit: '項', level: lvl(m.varianceCount, 1, 8) }),
+    statCard('rfi', 'RFI 候選', m.rfiCount, { unit: '項', level: lvl(m.rfiCount, 1, 10) }),
+    statCard('longlead', '長交期', m.longLeadCount, { unit: '項', level: m.longLeadCount ? 'warn' : '' }),
+  ].join('');
+}
+
+function renderStages(m) {
+  const ctxm = { ...m, docs: state.docs.length, packages: state.packages.length, baseline: state.packages.filter((p) => p.baseline).length };
+  $('#stages').innerHTML = A.STAGES.map((st, i) => {
+    const warn = st.warn && st.warn(ctxm);
+    const done = !warn && st.done(ctxm);
+    return `${i ? '<span class="arrow">→</span>' : ''}<span class="stage ${warn ? 'warn' : done ? 'done' : ''}">${done ? '✓' : warn ? '!' : '○'} ${esc(st.label)}</span>`;
+  }).join('');
+}
+
+function renderRfi(rfis) {
+  $('#rfiCount').textContent = String(rfis.length);
+  const host = $('#rfiList');
+  if (!rfis.length) {
+    host.innerHTML = '<div class="hint">沒有偵測到不一致。注意：這只代表「已載入的文件之間」沒有矛盾，不代表圖說本身正確。</div>';
+    return;
+  }
+  host.innerHTML = rfis.map((r) => `<div class="rfi ${r.severity}">
+    <h4><span class="chip">${esc(r.code)}</span>
+      <span class="chip ${r.severity === 'high' ? 'bad' : r.severity === 'med' ? 'warn' : ''}">${esc(A.RFI_TYPES[r.type].label)}</span>
+      ${esc(r.title)}
+      ${r.itemCode ? `<button class="btn sm" data-rfigo="${esc(r.itemCode)}">看工項</button>` : ''}</h4>
+    <p>${esc(r.question)}</p>
+    <table><tbody>${(r.evidence || []).map((e) => `<tr><td>${esc(e.label)}</td><td>${esc(e.value)}</td><td>${esc(e.from || '')}</td></tr>`).join('')}</tbody></table>
+    <p class="hint">建議發問對象：${esc(r.askTo)}</p>
+  </div>`).join('');
+}
+
+function onStatClick(key) {
+  const m = state.analysis && state.analysis.metrics;
+  if (!m) return;
+  if (key === 'completeness') {
+    const c = m.completeness;
+    return dialog(`圖說完整性 ${(c.value * 100).toFixed(1)}%`, `
+      <table class="fac"><thead><tr><td>項目</td><td style="text-align:right">權重</td><td style="text-align:right">達成率</td><td style="text-align:right">貢獻</td></tr></thead>
+      <tbody>${c.parts.map((p) => `<tr><td>${esc(p.label)}<div class="hint">${esc(p.note)}</div></td>
+        <td>${(p.weight * 100).toFixed(0)}%</td><td>${(p.score * 100).toFixed(0)}%</td><td>${(p.weight * p.score * 100).toFixed(1)}%</td></tr>`).join('')}
+      <tr><td><b>合計</b></td><td></td><td></td><td><b>${(c.value * 100).toFixed(1)}%</b></td></tr></tbody></table>
+      <p class="hint" style="margin-top:10px">這不是 AI 判斷的「像不像完整」，是五個可查證比例的加權。
+      要拉高它只有一條路：補文件、補規格、設比例、結案 RFI。數字不會因為換個演算法變好看。</p>`);
+  }
+  if (key === 'rfi') { $('#rfiList').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  const filters = {
+    variance: () => { state.onlyIssues = true; $('#onlyIssues').checked = true; },
+    confirmed: () => { state.onlyIssues = false; $('#onlyIssues').checked = false; },
+    special: () => { state.search = ''; $('#treeSearch').value = ''; },
+    longlead: () => { state.search = ''; $('#treeSearch').value = ''; },
+  };
+  if (key === 'special' || key === 'longlead') {
+    const long = state.settings.longLeadDays || 90;
+    const list = key === 'special' ? state.items.filter((i) => i.special) : state.items.filter((i) => (i.leadTimeDays || 0) >= long);
+    return dialog(key === 'special' ? '特殊規格工項' : `長交期工項（≥ ${long} 天）`,
+      list.length ? `<ul style="margin:0 0 0 18px;padding:0">${list.map((i) => `<li><b>${esc(i.name)}</b>（${esc(i.code)}）— ${esc(i.spec || '')}
+        ${i.leadTimeDays ? `<span class="chip warn">${i.leadTimeDays} 天</span>` : ''}
+        ${i.specialNote ? `<div class="hint">${esc(i.specialNote)}</div>` : ''}</li>`).join('')}</ul>
+        <p class="hint" style="margin-top:10px">${key === 'special'
+          ? '特殊規格＝無法用標準品替代的項目。它們決定了你在議價時的實際籌碼有多少。'
+          : '長交期項目是排程的要徑。它們應該最先發包，而不是等整包 BOQ 都確認完。'}</p>`
+        : '<p>沒有符合的工項。</p>');
+  }
+  if (filters[key]) { filters[key](); setMidTab('list'); renderTable(); }
+  else setMidTab('list');
+}
+
+function exportRfiCsv() {
+  const rfis = (state.analysis && state.analysis.metrics.rfis) || [];
+  if (!rfis.length) return dialog('沒有 RFI', '<p>目前沒有偵測到不一致。</p>');
+  const head = ['RFI編號', '類型', '嚴重度', 'WBS', '工項代碼', '標題', '問題內容', '發問對象', '證據'];
+  const lines = [head, ...rfis.map((r) => [
+    r.code, A.RFI_TYPES[r.type].label, { high: '高', med: '中', low: '低' }[r.severity],
+    r.wbs, r.itemCode || '', r.title, r.question, r.askTo,
+    (r.evidence || []).map((e) => `${e.label}：${e.value}（${e.from || ''}）`).join(' / '),
+  ])].map((r) => r.map(csvCell).join(','));
+  download(`RFI-${state.projName}-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
 }
 
 // 供 e2e 測試觀察內部狀態
