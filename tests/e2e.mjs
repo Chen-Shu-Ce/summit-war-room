@@ -633,6 +633,60 @@ ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seq
 ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
 await page.waitForTimeout(400);
 
+console.log('\n【7之零】真實地籍圖暴露的座標與單位問題');
+await page.locator('#tabView').click();
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-tm2.dxf'));
+await page.waitForFunction(() => window.__takeoff.state.survey !== null, null, { timeout: 15000 });
+await page.waitForTimeout(600);
+await page.waitForSelector('#dlg[open]');
+const svTxt = await page.locator('#dlgBody').innerText();
+const svTitle = await page.locator('#dlgTitle').textContent();
+ok('宣告單位對不上座標大小時主動擋下', /單位對不上座標大小/.test(svTitle), svTitle);
+ok('辨識出 TWD97 TM2 座標系', svTxt.includes('TWD97 TM2'), '');
+ok('算出內容實際跨距（公尺）', /217|220/.test(svTxt) && svTxt.includes('公尺'), '');
+ok('把「照宣告會變成多小」直接算給人看', svTxt.includes('1,000 倍') && /0\.2\d+ 公尺/.test(svTxt), '');
+ok('回報座標分成多群、排除了幾個離群點', svTxt.includes('離群點'), '');
+ok('明說工具不會自動改單位', svTxt.includes('不會自動改單位'), '');
+
+const svBefore = await page.evaluate(() => window.__takeoff.state.viewer.metersPerUnit);
+ok('未確認前維持圖檔宣告的單位', svBefore === 0.001, String(svBefore));
+await page.locator('#dlgBody [data-setunit]').first().click();
+await page.waitForTimeout(400);
+const svAfter = await page.evaluate(() => ({
+  mpu: window.__takeoff.state.viewer.metersPerUnit,
+  fixed: window.__takeoff.state.surveyFixed,
+}));
+ok('確認後才改成公尺', svAfter.mpu === 1, JSON.stringify(svAfter));
+ok('單位修正留下可稽核紀錄', !!(svAfter.fixed && svAfter.fixed.from === '公厘'), JSON.stringify(svAfter.fixed));
+
+// 全覽要看內容，不是全部實體 —— 否則縮到看不見
+const fit = await page.evaluate(() => {
+  const v = window.__takeoff.state.viewer;
+  v.fit();
+  const raw = Math.max(v.bounds.maxX - v.bounds.minX, v.bounds.maxY - v.bounds.minY);
+  const used = v.contentBounds ? Math.max(v.contentBounds.maxX - v.contentBounds.minX, v.contentBounds.maxY - v.contentBounds.minY) : raw;
+  return { raw, used, k: v.view.k };
+});
+ok('全覽以內容範圍為準，不被離群圖例撐爛', fit.used < fit.raw / 100, JSON.stringify(fit));
+ok('縮放倍率合理（不會縮到看不見）', fit.k > 0.5, String(fit.k));
+
+// 地號不得被當成算式
+ok('地號 2-13、1006-2 不被誤判為算式', await page.evaluate(() => {
+  const st = window.__takeoff.state;
+  return st.calc === null || st.calc.verify.counts.rows === 0;
+}));
+
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(250);
+
+// 宣告正確的同一張圖不該被誤報
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-tm2-ok.dxf'));
+await page.waitForFunction(() => window.__takeoff.state.survey && window.__takeoff.state.survey.declared.toM === 1, null, { timeout: 15000 });
+await page.waitForTimeout(500);
+ok('宣告正確時不誤報單位問題', await page.evaluate(() => window.__takeoff.state.survey.ok === true));
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(250);
+
 console.log('\n【7之三】圖面計算式');
 await page.locator('#tabView').click();
 await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-calcsheet.dxf'));

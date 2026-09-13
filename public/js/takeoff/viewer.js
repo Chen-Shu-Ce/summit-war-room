@@ -10,6 +10,7 @@
  * PDF 未校正時 metersPerUnit = null，量測值刻意不顯示工程單位 —— 沒有比例的尺寸是假數字。
  */
 
+import * as SV from './survey.js';
 import * as DXF from './dxf.js';
 
 const PT_TO_M = 0.0254 / 72;   // 1 PDF pt = 1/72 inch
@@ -61,6 +62,11 @@ export class Viewer {
     this.mode = 'dxf'; this.doc = doc; this.page = null; this.raster = null;
     this.flat = DXF.flatten(doc);
     this.bounds = DXF.bounds(doc);
+    // 全覽要看「內容」的範圍，不是「全部實體」的範圍。
+    // 地籍圖常把內容畫在 TWD97 TM2 測量座標上，圖例與指北針卻畫在原點旁 ——
+    // 對全部實體取外框會得到 270 萬單位的跨距，自動全覽因此縮到看不見任何東西。
+    const cb = SV.contentBounds(this.flat);
+    this.contentBounds = cb && cb.split ? cb : null;
     this.yUp = true;
     this.layerVisible = {};
     for (const e of this.flat) this.layerVisible[e.layer || '0'] ??= true;
@@ -103,15 +109,17 @@ export class Viewer {
     this.render();
   }
 
-  fit(pad = 0.06) {
+  /** opts.all = true 時強制用全部實體的外框（含離群的圖例）。 */
+  fit(pad = 0.06, opts = {}) {
     const r = this.cv.getBoundingClientRect();
     const w = r.width || 800, h = r.height || 600;
-    const bw = Math.max(this.bounds.maxX - this.bounds.minX, 1e-9);
-    const bh = Math.max(this.bounds.maxY - this.bounds.minY, 1e-9);
+    const b = (!opts.all && this.contentBounds) ? this.contentBounds : this.bounds;
+    const bw = Math.max(b.maxX - b.minX, 1e-9);
+    const bh = Math.max(b.maxY - b.minY, 1e-9);
     const k = Math.min(w / bw, h / bh) * (1 - pad * 2);
     this.view.k = k;
-    const cx = (this.bounds.minX + this.bounds.maxX) / 2;
-    const cy = (this.bounds.minY + this.bounds.maxY) / 2;
+    const cx = (b.minX + b.maxX) / 2;
+    const cy = (b.minY + b.maxY) / 2;
     this.view.tx = w / 2 - cx * k;
     this.view.ty = h / 2 - (this.yUp ? -cy : cy) * k;
     this.render();

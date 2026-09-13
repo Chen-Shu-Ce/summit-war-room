@@ -16,6 +16,7 @@ import * as PR from './pricing.js';
 import * as CS from './calcsheet.js';
 import * as ENC from './encoding.js';
 import * as U from './units.js';
+import * as SV from './survey.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -57,6 +58,8 @@ const state = {
   priceBase: null,     // 價格基準快照（凍結後才會有調整額）
   calc: null,          // 圖面計算式表的解析與驗算結果
   encoding: null,      // 最近一次 DXF 的編碼偵測結果
+  survey: null,        // 座標與單位合理性檢查
+  surveyFixed: null,   // 使用者確認過的單位修正
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -728,6 +731,7 @@ async function loadDxfFile(file) {
   updateScaleChip();
   renderMeasureList();
   detectCalcSheet(doc, file.name);
+  checkSurvey(doc);
   if (!doc.units.toM) {
     dialog('圖檔未定義單位', `<p>此 DXF 的 <code>$INSUNITS</code> 為「未定義」，無法自動換算成公尺。請指定圖檔單位：</p>
       <div class="fgrid">${[[0.001, '公厘 mm'], [0.01, '公分 cm'], [1, '公尺 m'], [0.0254, '英吋 in']].map(([v, l]) =>
@@ -958,6 +962,46 @@ function openAssign(mid) {
         renderAll(); renderMeasureList();
       },
     }]);
+}
+
+/* ══════════ 座標與單位合理性 ══════════ */
+
+/**
+ * 真實圖檔逼出來的兩道檢查：宣告單位與座標實際大小對不對得起來，
+ * 以及圖面是不是散成好幾群座標（地籍內容在測量座標、圖例在原點旁）。
+ *
+ * 兩者都不會讓畫面出錯 —— 只會讓數量安靜地錯掉。所以一定要主動講。
+ */
+function checkSurvey(doc) {
+  const chk = SV.checkUnits(doc, DXF.flatten(doc));
+  state.survey = chk;
+  if (!chk || (chk.ok && !chk.reasons.length)) return;
+  const bad = chk.reasons.filter((r) => r.level === 'bad');
+  if (!bad.length && !chk.split) return;
+
+  const cands = chk.suggest ? [chk.suggest] : (chk.candidates || []);
+  setTimeout(() => dialog(bad.length ? '圖檔宣告的單位對不上座標大小' : '座標分布異常', `
+    ${chk.crs ? `<p class="chip" style="display:block;padding:8px 10px">辨識為 <b>${esc(chk.crs)}</b>　內容跨距
+      <b>${Q.fmt(chk.bounds.width, 1)} × ${Q.fmt(chk.bounds.height, 1)} 公尺</b></p>` : ''}
+    ${chk.reasons.map((r) => `<p class="chip ${r.level === 'bad' ? 'bad' : 'warn'}" style="display:block;padding:8px 10px;white-space:normal">${esc(r.msg)}</p>`).join('')}
+    ${cands.length ? `<div class="fgrid" style="margin-top:10px">
+      <div style="grid-column:1/-1"><label class="f">改用哪個單位</label>
+      <div style="display:flex;gap:7px;flex-wrap:wrap">${cands.map((u) =>
+        `<button class="btn ${chk.suggest && u.toM === chk.suggest.toM ? 'primary' : ''}" data-setunit="${u.toM}">${esc(u.name)}（1 單位 = ${u.toM} M）</button>`).join('')}</div></div>
+    </div>` : ''}
+    <p class="hint" style="margin-top:9px">工具<b>不會自動改單位</b> —— 改單位會改變每一筆抓出來的數量。
+    這是工程判斷，請確認後再按。不改也可以繼續，但圖面量會照宣告的單位算。</p>`,
+    [{ label: '維持原宣告' }], (body) => {
+      body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-setunit]');
+        if (!b) return;
+        const toM = parseFloat(b.dataset.setunit);
+        state.viewer.setNativeUnit(toM);
+        state.surveyFixed = { from: chk.declared && chk.declared.name, toM, at: new Date().toISOString() };
+        updateScaleChip(); renderAll(); persist();
+        $('#dlg').close();
+      });
+    }), 120);
 }
 
 /* ══════════ 圖面計算式 ══════════ */
@@ -3007,4 +3051,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
