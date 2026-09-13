@@ -9,6 +9,8 @@
  * 不支援：SPLINE 精確弧長（以控制點折線近似並標記）、HATCH 面積（僅計數）、二進位 DXF。
  */
 
+import * as ENC from './encoding.js';
+
 const NUMERIC = (c) =>
   (c >= 10 && c <= 59) || (c >= 110 && c <= 149) || (c >= 210 && c <= 239) ||
   (c >= 460 && c <= 469) || (c >= 1010 && c <= 1059);
@@ -204,7 +206,9 @@ function normalize(type, rec, warnings) {
       return { type: 'POLYLINE', layer, pts: p, closed: true, from: type };
     }
     case 'TEXT': case 'MTEXT':
-      return { type: 'TEXT', layer, pt: { x: one(rec, 10, 0), y: one(rec, 20, 0) }, h: one(rec, 40, 2.5), text: String(one(rec, 1, '')) };
+      // MTEXT 把字型、字高、堆疊分數等排版碼混在文字裡，這裡一併還原成純文字。
+      return { type: 'TEXT', layer, pt: { x: one(rec, 10, 0), y: one(rec, 20, 0) }, h: one(rec, 40, 2.5),
+        text: ENC.decodeMText(String(one(rec, 1, ''))), raw: String(one(rec, 1, '')) };
     case 'INSERT':
       return {
         type: 'INSERT', layer, name: String(one(rec, 2, '')),
@@ -394,7 +398,7 @@ export function fromDwgDatabase(db) {
       case 'CIRCLE': return { type: 'CIRCLE', layer, c: P(e.center), r: e.radius || 0 };
       case 'ARC': return { type: 'ARC', layer, c: P(e.center), r: e.radius || 0, a0: rad2deg(e.startAngle), a1: rad2deg(e.endAngle) };
       case 'INSERT': return { type: 'INSERT', layer, name: e.name || e.blockName || '', pt: P(e.insertionPoint), sx: e.xScale ?? 1, sy: e.yScale ?? 1, rot: rad2deg(e.rotation), cols: e.columnCount || 1, rows: e.rowCount || 1, colSp: e.columnSpacing || 0, rowSp: e.rowSpacing || 0 };
-      case 'TEXT': case 'MTEXT': return { type: 'TEXT', layer, pt: P(e.insertionPoint || e.startPoint), h: e.textHeight || 2.5, text: e.text || '' };
+      case 'TEXT': case 'MTEXT': return { type: 'TEXT', layer, pt: P(e.insertionPoint || e.startPoint), h: e.textHeight || 2.5, text: ENC.decodeMText(e.text || ''), raw: e.text || '' };
       case 'POINT': return { type: 'POINT', layer, pt: P(e.position || e.center) };
       default: return null;
     }

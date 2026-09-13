@@ -14,6 +14,8 @@ import * as R from './risk.js';
 import * as S from './sequence.js';
 import * as PR from './pricing.js';
 import * as CS from './calcsheet.js';
+import * as ENC from './encoding.js';
+import * as U from './units.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -54,6 +56,7 @@ const state = {
   marketErr: null,
   priceBase: null,     // 價格基準快照（凍結後才會有調整額）
   calc: null,          // 圖面計算式表的解析與驗算結果
+  encoding: null,      // 最近一次 DXF 的編碼偵測結果
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -703,12 +706,24 @@ async function loadDrawing(file) {
 async function loadDxfFile(file) {
   const buf = await file.arrayBuffer();
   if (DXF.isBinaryDxf(buf)) throw new Error('這是二進位 DXF。請在 CAD 另存為「ASCII DXF」後再匯入。');
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-  const doc = DXF.parseDxf(text);
+  // 台灣的 DXF 幾乎都是 Big5。寫死 UTF-8 會把每個中文字變成 U+FFFD ——
+  // 畫面上就是那一整排 ????，而且看起來跟「缺字型」一模一樣。
+  const enc = ENC.decodeDxf(buf);
+  state.encoding = enc;
+  const doc = DXF.parseDxf(enc.text);
   if (!doc.entities.length) throw new Error('DXF 中找不到可用實體（模型空間為空或版本過舊）。');
   state.drawing = { name: file.name, kind: 'dxf', doc };
   state.viewer.loadDxf(doc);
-  $('#drawName').textContent = `${file.name} · ${doc.entities.length} 實體 · 單位 ${doc.units.name}`;
+  $('#drawName').textContent = `${file.name} · ${doc.entities.length} 實體 · 單位 ${doc.units.name} · ${enc.encoding}`;
+  // 只在真的有風險時打斷使用者：解出無法辨識的字，或檔頭宣告被推翻。
+  // 乾淨的推測不需要跳視窗嚇人 —— 用什麼編碼解的已經寫在狀態列了。
+  if (enc.bad > 0 || enc.from === 'guess-after-bad-codepage') {
+    setTimeout(() => dialog('文字編碼', `<p>${esc(ENC.describe(enc))}</p>
+      ${enc.bad > 0 ? `<p class="chip bad" style="display:block;padding:8px 10px">仍有 ${enc.bad} 個字無法解出。</p>` : ''}
+      <p class="hint">各候選編碼的評分：${enc.tried.map((t) => `${esc(t.encoding)} ${t.score}`).join('　')}</p>
+      <p class="hint"><b>解碼錯誤與缺字型不一樣。</b>缺字型是 CAD 找不到 SHX 大字型檔、畫不出字形，換字型就好；
+      解碼錯誤是位元組被錯誤詮釋，字根本不存在了，換字型無效。這裡處理的是後者。</p>`), 80);
+  }
   $('#pageChip').hidden = true;
   updateScaleChip();
   renderMeasureList();
@@ -1027,9 +1042,10 @@ function openCalcSheet() {
         <td>${esc(r.unit || '')}</td>
         <td class="hint">${r.refs.length ? esc(r.refs.join('、')) : ''}</td></tr>`).join('')}</tbody></table></div>
 
+    ${calcMatchBlock(v.rows)}
     <h4 style="margin:14px 0 6px">套用到工項</h4>
     <p class="hint">計算式會寫進工項的「圖面計算式」欄，成為第五條獨立來源，與幾何量、BOQ 量三方比對。
-    <b>只套用數字，不覆蓋任何既有來源。</b></p>
+    <b>只套用數字，不覆蓋任何既有來源。</b>同維度單位（M²↔坪、CM↔M）會自動換算並記在出處裡。</p>
     <div class="fgrid">
       <div><label class="f">套用哪一個數值</label><select id="calcPick">
         ${gt ? `<option value="__total__">總計 ${Q.fmt(gt.stated, 2)} ${esc(gt.unit || '')}</option>` : ''}
@@ -1043,6 +1059,38 @@ function openCalcSheet() {
     [{ label: '關閉' }, { label: '套用', primary: true, fn: applyCalcToItem }]);
 }
 
+/**
+ * 名稱自動比對。編碼修好之前這件事做不到 —— 名稱全是 ???? 的時候無從比對。
+ * 出來的一律是**建議**，附分數與換算結果，由人確認後才寫入。
+ */
+function calcMatchBlock(rows) {
+  const cand = rows.filter((r) => r.name && !r.isTotal);
+  if (!cand.length) return '';
+  const ms = CS.matchItems(cand, state.items).filter((m) => m.match);
+  if (!ms.length) {
+    return `<h4 style="margin:14px 0 6px">名稱比對</h4>
+      <p class="chip warn" style="display:block;padding:8px 10px">
+      這張表的 ${cand.length} 個名稱都對不到 BOM 工項。<b>這通常不是錯誤</b> ——
+      計算式表列的常是「空間」（玄關、會議室），BOM 列的是「材料」（電纜、鋼筋），兩者本來就不是一對一。
+      樓地板面積要先乘上單位用量才會變成材料數量，那一步是工程判斷，工具不替你做。</p>`;
+  }
+  return `<h4 style="margin:14px 0 6px">名稱比對（${ms.length} 筆建議）</h4>
+    <table class="mkt"><thead><tr><th>計算式列</th><th class="n">數值</th><th>建議工項</th><th class="n">換算後</th><th>把握度</th></tr></thead>
+    <tbody>${ms.map((m) => `<tr>
+      <td>${esc(m.row.name)}<div class="hint">${esc(m.row.mark || '')}</div></td>
+      <td class="n">${Q.fmt(m.row.stated, 2)} ${esc(U.labelOf(m.row.unit))}</td>
+      <td>${esc(m.match.code)} ${esc(m.match.name)}<div class="hint">${esc(m.match.unit)}</div></td>
+      <td class="n">${m.convert && m.convert.ok
+        ? `${Q.fmt(m.convert.value, 2)}${m.convert.factor !== 1 ? `<div class="hint">${esc(m.convert.how)}</div>` : ''}`
+        : `<span class="chip bad">不可換算</span>`}</td>
+      <td><span class="chip ${m.score >= 0.9 ? 'ok' : 'warn'}">${(m.score * 100).toFixed(0)}%</span>
+        ${m.ambiguous ? '<span class="chip warn">分不出來</span>' : ''}
+        ${m.dimOk === false ? '<span class="chip bad">維度不符</span>' : ''}</td></tr>`).join('')}</tbody></table>
+    <p class="hint" style="margin-top:5px">這些是<b>建議</b>，不是結論。名稱相似不等於同一個工項 ——
+    請在下方逐一確認後套用。編碼修好之前這一步做不到，因為名稱全是問號時無從比對。</p>`;
+}
+
+/** 從對話框讀出選擇，交給 applyCalcRow。選擇必須在這裡抓下來 —— */
 function applyCalcToItem() {
   const code = $('#calcItem') && $('#calcItem').value;
   const pick = $('#calcPick') && $('#calcPick').value;
@@ -1052,24 +1100,52 @@ function applyCalcToItem() {
   const { sheet, verify: v } = state.calc;
   const row = pick === '__total__' ? CS.grandTotal(sheet) : v.rows.find((r) => String(r.y) === pick);
   if (!row) return;
+  applyCalcRow(row, it);
+}
 
-  if (row.unit && it.unit && CS.normUnit(it.unit) !== row.unit) {
-    return setTimeout(() => dialog('單位不一致，未套用', `<p>計算式的單位是 <b>${esc(row.unit)}</b>，
-      工項「${esc(it.name)}」的單位是 <b>${esc(it.unit)}</b>。</p>
-      <p class="hint">單位不同就不是同一種量。工具不會替你換算 —— 面積換長度需要厚度或寬度，
-      那是工程判斷，不是算術。請先確認要套用的是哪一列。</p>`), 60);
+/**
+ * 實際套用。row 與 item 由呼叫端帶進來，不在這裡重讀 DOM ——
+ * 補寬度的對話框會換掉整個 body，那時候下拉選單早就不存在了。
+ */
+function applyCalcRow(row, it, bridgeValue) {
+  const v = state.calc.verify;
+  // 同維度自動換算（M²↔坪、CM↔M、KG↔公噸…）；跨維度要補寬度／厚度，工具會問不會猜。
+  const conv = U.convert(row.stated, row.unit || it.unit, it.unit, { bridge: bridgeValue });
+  if (!conv.ok) {
+    if (conv.reason === 'need-bridge') return askBridge(row, it, conv);
+    return setTimeout(() => dialog('無法換算，未套用', `<p>${esc(conv.msg)}</p>
+      <p class="hint">計算式的單位是 <b>${esc(U.labelOf(row.unit))}</b>，工項「${esc(it.name)}」的單位是
+      <b>${esc(U.labelOf(it.unit))}</b>。請確認要套用的是哪一列。</p>`), 60);
   }
 
-  it.qty.calc = row.stated;
-  it.calcSource = `${state.calc.source} · ${row.mark ? `列 ${row.mark}` : '總計'}：${row.expr}=${row.stated}`;
+  it.qty.calc = conv.value;
+  it.calcSource = `${state.calc.source} · ${row.mark ? `列 ${row.mark}` : '總計'}：${row.expr}=${row.stated}${U.labelOf(row.unit)}`
+    + (conv.factor === 1 ? '' : `（${conv.how}）`);
   it.calcIssues = v.issues.filter((i) => i.row === (row.mark || '—'));
-  const cross = CS.crossCheck(row.stated, it.qty.drawing);
+  const cross = CS.crossCheck(conv.value, it.qty.drawing);
   renderAll(); persist();
   setTimeout(() => dialog('已套用', `
-    <p>「${esc(it.name)}」的圖面計算式量 = <b>${Q.fmt(row.stated, 2)} ${esc(it.unit)}</b></p>
+    <p>「${esc(it.name)}」的圖面計算式量 = <b>${Q.fmt(conv.value, 2)} ${esc(it.unit)}</b></p>
+    ${conv.factor !== 1 || conv.bridge ? `<p class="chip" style="display:block;padding:7px 10px">已換算：${esc(conv.how)}</p>` : ''}
     <p class="hint">出處：${esc(it.calcSource)}</p>
     ${cross ? `<p class="chip ${cross.agree ? 'ok' : 'bad'}" style="display:block;padding:8px 10px">
       幾何量 ${Q.fmt(cross.drawing, 2)}，差異 ${Q.pct(cross.rate)}。${esc(cross.verdict)}</p>` : ''}`), 60);
+}
+
+/** 跨維度換算缺的那一個量，由工程指定 —— 工具問，不猜。 */
+function askBridge(row, it, conv) {
+  const b = conv.bridge;
+  setTimeout(() => dialog(`需要${b.need}才能換算`, `
+    <p>計算式是 <b>${Q.fmt(row.stated, 2)} ${esc(U.labelOf(row.unit))}</b>，
+    工項「${esc(it.name)}」的單位是 <b>${esc(U.labelOf(it.unit))}</b>。</p>
+    <p class="chip warn" style="display:block;padding:8px 10px">${esc(b.why)}</p>
+    <div class="fgrid"><div><label class="f">${esc(b.need)}（${esc(b.unit)}）</label>
+      <input type="number" id="bridgeVal" step="0.001" min="0" placeholder="例如 0.6"></div></div>
+    <p class="hint">這個數字不在圖上的算式裡，所以工具不會替你假設。填入後會記在數量出處裡，日後可稽核。</p>`,
+    [{ label: '取消' }, { label: '換算並套用', primary: true, fn: () => {
+      const val = parseFloat($('#bridgeVal').value);
+      if (Number.isFinite(val) && val > 0) applyCalcRow(row, it, val);
+    } }]), 60);
 }
 
 /* ══════════ 圖層 → 工項自動抓量 ══════════ */
@@ -2569,7 +2645,7 @@ async function loadPdfjs() {
 async function parseDxfFile(file) {
   const buf = await file.arrayBuffer();
   if (DXF.isBinaryDxf(buf)) throw new Error('二進位 DXF，請在 CAD 另存為 ASCII DXF');
-  const doc = DXF.parseDxf(new TextDecoder('utf-8', { fatal: false }).decode(buf));
+  const doc = DXF.parseDxf(ENC.decodeDxf(buf).text);
   if (!doc.entities.length) throw new Error('DXF 中找不到可用實體');
   return doc;
 }
@@ -2931,4 +3007,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

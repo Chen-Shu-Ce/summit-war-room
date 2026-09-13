@@ -18,6 +18,7 @@
  */
 
 import * as Q from './quantity.js';
+import * as U from './units.js';
 
 /* ────────── 字元正規化 ────────── */
 
@@ -41,19 +42,14 @@ export function normalize(s) {
 
 /* ────────── 單位 ────────── */
 
-const UNIT_MAP = {
-  m2: 'M2', 'm²': 'M2', '㎡': 'M2', '平方公尺': 'M2', '平方米': 'M2', sqm: 'M2',
-  m3: 'M3', 'm³': 'M3', '㎥': 'M3', '立方公尺': 'M3', '立方米': 'M3',
-  m: 'M', '公尺': 'M', '米': 'M', lm: 'M',
-  kg: 'KG', '公斤': 'KG', t: 'T', '公噸': 'T', '噸': 'T',
-  '只': '只', '個': '個', '座': '座', '台': '台', '組': '組', '式': '式', '樘': '樘', '處': '處',
-};
-
+/** 單位正規化交給 units.js —— 單位表只能有一份，兩份一定會漂移。 */
 export function normUnit(u) {
-  const k = String(u ?? '').trim();
-  if (!k) return null;
-  return UNIT_MAP[k] || UNIT_MAP[k.toLowerCase()] || k.toUpperCase();
+  const k = U.normalize(u);
+  return k ? U.labelOf(k) : (String(u ?? '').trim() || null);
 }
+
+/** 單位認不認得。認不得的單位不參與維度判斷，也不會被拿去換算。 */
+export function knownUnit(u) { return U.normalize(u) !== null; }
 
 /* ────────── 列號標記（圈號） ────────── */
 
@@ -300,9 +296,16 @@ export function parseSheet(texts, opts = {}) {
 
     const left = r.cells.filter((c) => c !== exprCell && (c.x || 0) < (exprCell.x || 0));
     const label = [left.map((c) => c.text).join(' '), parsed.prefix || ''].filter(Boolean).join(' ').trim();
-    const own = marksIn(label);
+    let own = marksIn(label);
+    // Big5 字集沒有 ⓐ ① ㈠ 這些圈號字元，所以台灣的圖多半把圈圈畫成 CIRCLE 幾何、
+    // 圈裡只放一個裸字母。那個字母在文字層就是最左邊的一格單一字元。
+    if (!own.length && left.length) {
+      const first = String(left[0].text || '').trim();
+      if (/^[a-zA-Z]$|^\d{1,2}$/.test(first)) own = [first];
+    }
     const row = {
-      y: r.y, label, name: label.replace(/^[^\s]*\s*/, '').trim() || null,
+      y: r.y, label,
+      name: cleanName(label),
       mark: own.length ? own[0] : null,
       ...parsed,
       refs: [],                     // 之後由上方標記填入
@@ -333,12 +336,114 @@ export function parseSheet(texts, opts = {}) {
   };
 }
 
+/** 從「（a） 玄關」這種標籤裡取出工項名稱，去掉列號與標點。 */
+export function cleanName(label) {
+  let s = normalize(String(label ?? ''));
+  s = s.replace(/^\s*[(（]?\s*[a-zA-Z0-9]{1,2}\s*[)）]?\s*/, '');
+  for (const ch of CIRCLE_LOWER + CIRCLE_UPPER + CIRCLE_NUM) s = s.split(ch).join('');
+  s = s.replace(/[=：:]\s*$/, '').trim();
+  return s || null;
+}
+
+/**
+ * 把計算式的列對到 BOM 工項。
+ *
+ * 這件事在編碼修好之前做不到 —— 名稱全是 ???? 的時候無從比對。
+ * 回傳的一律是**建議**：分數、理由都附上，由人確認後才寫入。
+ * 名稱相似不等於同一個工項，工具沒有資格替使用者決定。
+ */
+export function matchItems(rows, items, opts = {}) {
+  const minScore = Q.isNum(opts.minScore) ? opts.minScore : 0.4;
+  const out = [];
+  for (const r of rows) {
+    if (!r.name) continue;
+    const cand = [];
+    for (const it of items) {
+      const score = nameScore(r.name, it);
+      if (score <= 0) continue;
+      const dimOk = !r.unit || !it.unit || U.dimOf(r.unit) === U.dimOf(it.unit);
+      cand.push({ item: it, score: dimOk ? score : score * 0.4, dimOk });
+    }
+    cand.sort((a, b) => b.score - a.score);
+    const top = cand[0];
+    if (!top || top.score < minScore) { out.push({ row: r, match: null, candidates: cand.slice(0, 3) }); continue; }
+    const conv = (r.unit && top.item.unit) ? U.convert(r.stated, r.unit, top.item.unit) : null;
+    out.push({
+      row: r, match: top.item, score: top.score, dimOk: top.dimOk,
+      convert: conv,
+      // 第二名太接近就是分不出來，要讓人自己選
+      ambiguous: cand.length > 1 && cand[1].score > top.score * 0.85,
+      candidates: cand.slice(0, 3),
+    });
+  }
+  return out;
+}
+
+/** 名稱相似度 0–1。中文沒有空白分詞，用字元層的最長共同子字串比例。 */
+export function nameScore(name, item) {
+  const a = String(name || '').replace(/\s+/g, '');
+  if (!a) return 0;
+  let best = 0;
+  for (const field of [item.name, item.spec, item.code]) {
+    const b = String(field || '').replace(/\s+/g, '');
+    if (!b) continue;
+    if (a === b) { best = Math.max(best, 1); continue; }
+    if (b.includes(a) || a.includes(b)) {
+      best = Math.max(best, Math.min(a.length, b.length) / Math.max(a.length, b.length));
+      continue;
+    }
+    const lcs = longestCommon(a, b);
+    if (lcs >= 2) best = Math.max(best, lcs / Math.max(a.length, b.length));
+  }
+  return best;
+}
+
+function longestCommon(a, b) {
+  let best = 0;
+  const prev = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = 0;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = a[i - 1] === b[j - 1] ? diag + 1 : 0;
+      if (prev[j] > best) best = prev[j];
+      diag = tmp;
+    }
+  }
+  return best;
+}
+
 /* ────────── 驗算 ────────── */
 
-/** 四捨五入到指定位數（避開 0.5 的浮點邊界）。 */
-function roundTo(v, d) {
+/**
+ * 四捨五入到指定位數，半進位（四捨五入），並先修掉二進位表示誤差。
+ *
+ * 3.45*3.90 在浮點裡是 13.454999999999998，直接 *100 再 Math.round 會得到 13.45，
+ * 但工程上 13.455 四捨五入就是 13.46。toPrecision(15) 把表示誤差抹掉後再進位。
+ */
+export function roundHalfUp(v, d) {
+  if (!Number.isFinite(v)) return v;
   const f = Math.pow(10, d);
-  return Math.round((v * f).toFixed(6) * 1) / f;
+  const scaled = Number((v * f).toPrecision(15));
+  return (scaled < 0 ? -1 : 1) * Math.round(Math.abs(scaled)) / f;
+}
+
+/** 兩個數在小數第 d 位上是否**完全相等**（比整數，不留容差）。 */
+export function equalAt(a, b, d) {
+  const f = Math.pow(10, d);
+  return Math.round(roundHalfUp(a, d) * f) === Math.round(roundHalfUp(b, d) * f);
+}
+
+/** 這張表主要在量什麼維度 —— 以計算式列的多數決決定。 */
+export function dominantDim(rows) {
+  const count = new Map();
+  for (const r of rows || []) {
+    const d = U.dimOf(r.unit);
+    if (d) count.set(d, (count.get(d) || 0) + 1);
+  }
+  let best = null;
+  for (const [d, n] of count) if (!best || n > best[1]) best = [d, n];
+  return best ? best[0] : null;
 }
 
 export const ISSUE = {
@@ -368,13 +473,16 @@ export function verify(sheet, opts = {}) {
   for (const r of rows) {
     // 1. 算式本身
     if (r.error) { push('parse', r, `${r.expr}：${r.error}`); r.ok = false; continue; }
-    const rounded = roundTo(r.computed, r.decimals);
+    // 圖上寫的是「四捨五入到 N 位」的結果，所以比對方式是：
+    // 把重算值四捨五入到同樣位數，然後要求**完全相等**。
+    // 不再另外給容差 —— 進位過後還允許誤差，等於同一件事放寬兩次。
+    const rounded = roundHalfUp(r.computed, r.decimals);
     r.rounded = rounded;
     r.diff = r.computed - r.stated;
-    r.ok = Math.abs(rounded - r.stated) < Math.pow(10, -r.decimals) / 2;
+    r.ok = equalAt(r.computed, r.stated, r.decimals);
     if (!r.ok) {
-      push('arith', r, `${r.expr} 重算為 ${rounded.toFixed(r.decimals)}，圖上寫 ${r.stated.toFixed(r.decimals)}（差 ${(r.computed - r.stated).toFixed(r.decimals + 2)}）`,
-        { computed: rounded, stated: r.stated });
+      push('arith', r, `${r.expr} 重算並四捨五入至小數 ${r.decimals} 位為 ${rounded.toFixed(r.decimals)}，圖上寫 ${r.stated.toFixed(r.decimals)}（未進位前為 ${r.computed.toFixed(r.decimals + 3)}）`,
+        { computed: rounded, stated: r.stated, raw: r.computed });
     }
 
     // 2. 交叉參照：被扣掉的數字要對得上它參照的那一列
@@ -411,21 +519,29 @@ export function verify(sheet, opts = {}) {
   // 4. 宣告值 vs 算出來的總計。
   //    圖上常在好幾處各寫一次總面積（標題、圖例、統計框）。改版時最容易漏改其中一處，
   //    而那正是這種表最常見、也最貴的錯誤。
+  //
+  //    但只有**同維度**的宣告才算數：圖上的「t=15cm」是版厚註記，不是面積宣告。
+  //    拿它去對 1509.04 M2 會產生一個看起來很嚴重、實際上毫無意義的警告。
   const declared = sheet.declared || [];
+  const sheetDim = dominantDim(rows);
   const gt = rows.filter((r) => r.isTotal).reduce((a, b) => (!a || b.stated > a.stated ? b : a), null);
   for (const d of declared) {
-    const same = [...rows, ...declared].filter((x) => x !== d && Math.abs(x.stated - d.stated) < 5e-3);
-    const tol = Math.pow(10, -Math.max(d.decimals, gt ? gt.decimals : 2)) / 2 + 1e-9;
-    if (gt && Math.abs(d.stated - gt.stated) > tol && !same.length) {
+    d.dim = U.dimOf(d.unit);
+    d.comparable = !!(sheetDim && d.dim && d.dim === sheetDim);
+    if (!d.comparable) { d.confirmedBy = 0; continue; }
+    const same = [...rows, ...declared].filter((x) => x !== d
+      && (U.dimOf(x.unit) === sheetDim)
+      && equalAt(x.stated, d.stated, Math.min(x.decimals, d.decimals)));
+    d.confirmedBy = same.length;
+    if (gt && !same.length && !equalAt(d.stated, gt.stated, Math.min(d.decimals, gt.decimals))) {
       push('declared', d, `圖上宣告 ${d.stated}${d.unit || ''}，但表上算出來的總計是 ${gt.stated}${gt.unit || ''}（差 ${(d.stated - gt.stated).toFixed(2)}）`,
         { declaredValue: d.stated, computedTotal: gt.stated });
     }
-    d.confirmedBy = same.length;
   }
 
-  // 5. 單位一致性
-  const units = [...new Set([...rows, ...declared].map((r) => r.unit).filter(Boolean))];
-  if (units.length > 1) push('unit', null, `本表出現 ${units.length} 種單位：${units.join('、')}`, { units });
+  // 5. 單位一致性 —— 只看計算式列。註記裡的 cm、mm 不是這張表在量的東西。
+  const units = [...new Set(rows.map((r) => r.unit).filter(Boolean))];
+  if (units.length > 1) push('unit', null, `本表的計算式出現 ${units.length} 種單位：${units.join('、')}`, { units });
 
   const bad = issues.filter((i) => i.level === 'bad').length;
   return {

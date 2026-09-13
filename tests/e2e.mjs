@@ -693,9 +693,32 @@ const blocked = await page.evaluate(() => ({
   txt: document.querySelector('#dlgBody').innerText,
   calc: window.__takeoff.state.itemByCode.get('321.01').qty.calc ?? null,
 }));
-ok('單位不一致時擋下並說明，不代為換算',
-  /單位不一致/.test(blocked.title) && /不會替你換算/.test(blocked.txt) && blocked.calc === null,
+ok('跨維度不自動換算，改問工程要寬度',
+  /需要寬度/.test(blocked.title) && /面積除以寬度才是長度/.test(blocked.txt) && blocked.calc === null,
   JSON.stringify(blocked).slice(0, 200));
+// 補上寬度後才換算，而且出處要記下這個數字
+await page.fill('#bridgeVal', '0.5');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(400);
+const bridged = await page.evaluate(() => {
+  const it = window.__takeoff.state.itemByCode.get('321.01');
+  return { calc: it.qty.calc, src: it.calcSource };
+});
+ok('補上寬度 0.5M 後：1509.04 M2 ÷ 0.5 = 3018.08 M',
+  Math.abs(bridged.calc - 3018.08) < 0.01, JSON.stringify(bridged).slice(0, 160));
+ok('換算方式寫進數量出處，可稽核', /除以寬度 0\.5/.test(bridged.src || ''), bridged.src);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+
+// 同維度自動換算：坪 → M2
+ok('同維度自動換算（坪 → M2，係數 3.3057851）', await page.evaluate(() => {
+  const r = window.__takeoff.U.convert(456.5, '坪', 'M2');
+  return r.ok && Math.abs(r.value - 1509.09) < 0.02;
+}));
+ok('計數單位不與面積互換（一片磚幾 M² 是規格問題）', await page.evaluate(() => {
+  const r = window.__takeoff.U.convert(10, 'M2', '樘');
+  return !r.ok && r.reason === 'count';
+}));
 if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
 await page.waitForTimeout(200);
 
