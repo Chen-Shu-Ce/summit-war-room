@@ -10,6 +10,7 @@ import * as DXF from './dxf.js';
 import { Viewer, TOOLS } from './viewer.js';
 import * as A from './analysis.js';
 import * as B from './baseline.js';
+import * as R from './risk.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -56,6 +57,7 @@ async function init() {
     ...Q.DEFAULT_SETTINGS,
     prTemplate: B.DEFAULT_PR_TEMPLATE, taxRate: 0.05, dept: '', project: '',
     erpProfile: 'generic', erpMapping: { header: {}, line: {} }, requireErpCode: true,
+    ...R.DEFAULT_SIM, stochastic: true,
     ...(state.template.settings || {}),
   };
   buildModel(state.template);
@@ -226,7 +228,9 @@ function renderTable() {
       const n = state.nodeByCode.get(it.wbs);
       rows.push(`<tr class="grp"><td colspan="12">${esc(it.wbs)} · ${esc(n ? n.name : '未分類')}</td></tr>`);
     }
-    const p = Q.suggestPurchase(it, state.settings);
+    const pi = priced(it);
+    const stoch = state.settings.stochastic && R.isStochastic(it);
+    const p = Q.suggestPurchase(pi, state.settings);
     const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
     const sel = state.selected.has(it.code);
     const gate = Q.bandAtLeast(c.band, state.settings.gateBand) && !p.blocked;
@@ -242,8 +246,12 @@ function renderTable() {
       <td class="num">${varianceCell(it)}</td>
       <td><button class="srcbtn" data-basis="${esc(it.code)}">${esc(basisLabel)}</button> ${statusChip}</td>
       <td><button class="srcbtn chip band${c.band}" data-conf="${esc(it.code)}">${c.band} ${c.score}</button></td>
-      <td class="num"><input class="cellin num" type="number" step="0.5" min="0" max="100" data-waste="${esc(it.code)}" value="${Q.roundTo((it.wasteRate ?? state.settings.defaultWasteRate) * 100, 2)}"></td>
-      <td class="num sug">${p.suggestQty == null ? '<span class="chip bad">—</span>' : Q.fmt(p.suggestQty, 2) + ' ' + esc(it.unit)}</td>
+      <td class="num">${stoch
+        ? `<button class="srcbtn" data-dist="${esc(it.code)}">${(pi.wasteRate * 100).toFixed(2)}</button><span class="sl">P${Math.round(levelOf(it) * 100)}</span>`
+        : `<input class="cellin num" type="number" step="0.5" min="0" max="100" data-waste="${esc(it.code)}" value="${Q.roundTo((it.wasteRate ?? state.settings.defaultWasteRate) * 100, 2)}">`}</td>
+      <td class="num sug">${p.suggestQty == null ? '<span class="chip bad">—</span>'
+        : stoch ? `<button class="srcbtn" data-dist="${esc(it.code)}">${Q.fmt(p.suggestQty, 2)} ${esc(it.unit)}</button>`
+          : Q.fmt(p.suggestQty, 2) + ' ' + esc(it.unit)}</td>
       <td class="num">${p.orderQty == null ? '—' : `${Q.fmt(p.orderQty, 2)} ${esc(p.orderUnit)}${p.moqApplied ? ' <span class="chip warn">MOQ</span>' : ''}`}</td>
       <td class="num">${p.cost == null ? '—' : Q.fmt(p.cost, 0)}</td>
     </tr>`);
@@ -265,6 +273,21 @@ function renderTable() {
 
 function selectedItems() { return state.items.filter((i) => state.selected.has(i.code)); }
 
+/**
+ * 採購計算前的單一入口：把工項的損耗率換成「該服務水準下的分位數」。
+ * 關掉機率模式就原封不動回傳 —— quantity.js 完全不需要知道機率的存在。
+ */
+function priced(it) {
+  if (!state.settings.stochastic) return it;
+  return R.withServiceLevel(it, state.settings, it.serviceLevel);
+}
+function pricedAll(list) { return list.map(priced); }
+
+/** 目前套用的服務水準。 */
+function levelOf(it) {
+  return Q.isNum(it.serviceLevel) ? it.serviceLevel : (state.settings.serviceLevel ?? 0.8);
+}
+
 function renderCart() {
   const host = $('#cart');
   const list = selectedItems();
@@ -278,7 +301,7 @@ function renderCart() {
       const n = state.nodeByCode.get(wbs);
       out.push(`<div class="cartitem" style="background:var(--line2);padding:4px 12px"><b style="font-size:11.5px">${esc(wbs)} · ${esc(n ? n.name : '')}</b></div>`);
       for (const it of arr) {
-        const p = Q.suggestPurchase(it, state.settings);
+        const p = Q.suggestPurchase(priced(it), state.settings);
         const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
         const pkg = state.packages.find((k) => k.itemCodes.includes(it.code));
         out.push(`<div class="cartitem">
@@ -297,7 +320,7 @@ function renderCart() {
     }
     host.innerHTML = out.join('');
   }
-  const s = Q.summarize(list, state.settings);
+  const s = Q.summarize(pricedAll(list), state.settings);
   $('#totals').innerHTML = `
     <div class="totrow"><span>已選工項</span><b>${s.count}</b></div>
     <div class="totrow"><span>預估金額</span><b>NT$ ${Q.fmt(s.cost, 0)}${s.unpriced ? ` <span class="chip warn">${s.unpriced} 項未報價</span>` : ''}</b></div>
@@ -313,7 +336,7 @@ function renderPkgs() {
   if (!state.packages.length) { host.innerHTML = '<div class="hint" style="padding:16px;text-align:center">尚無採購包。選好工項後按「轉採購 Package」。</div>'; return; }
   host.innerHTML = state.packages.map((p, i) => {
     const items = p.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean);
-    const s = Q.summarize(items, state.settings);
+    const s = Q.summarize(pricedAll(items), state.settings);
     const lead = items.reduce((a, it) => Math.max(a, it.leadTimeDays || 0), 0);
     return `<div class="pkg">
       <header><b>${esc(p.code)}</b><span class="chip">${items.length} 項</span><span class="chip acc">NT$ ${Q.fmt(s.cost, 0)}</span>
@@ -372,6 +395,7 @@ function wire() {
 
   // 中表
   $('#boqBody').addEventListener('click', (e) => {
+    const ds = e.target.closest('[data-dist]'); if (ds) return openDistDialog(ds.dataset.dist);
     const s = e.target.closest('[data-src]'); if (s) return openSourceDialog(s.dataset.src);
     const b = e.target.closest('[data-basis]'); if (b) return openSourceDialog(b.dataset.basis);
     const c = e.target.closest('[data-conf]'); if (c) return openConfidenceDialog(c.dataset.conf);
@@ -411,6 +435,7 @@ function wire() {
   $('#btnClearCart').onclick = () => { if (confirm('清空已選清單？（採購包不受影響）')) { state.selected.clear(); renderAll(); } };
   $('#btnToPkg').onclick = toPackage;
   $('#btnAutoPkg').onclick = autoPackage;
+  $('#btnSim').onclick = openPortfolioSim;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -897,6 +922,129 @@ function layerValueFor(item, g, toM) {
 }
 
 
+
+/* ══════════ 風險模擬 ══════════ */
+
+const PCT_ROWS = [0.05, 0.5, 0.8, 0.9, 0.95];
+
+function openDistDialog(code) {
+  const it = state.itemByCode.get(code);
+  if (!it) return;
+  const sim = R.simulateItem(it, state.settings);
+  if (!sim) return dialog('無法模擬', '<p>此工項沒有有效的基準量。</p>');
+  if (sim.deterministic) {
+    return dialog(`${it.name} — 不適用機率模型`, `
+      <p>本項為<b>${it.measureType === 'count' ? '計數類' : '統包項'}</b>，沒有損耗分布可言 ——
+      6 台配電盤不會「損耗 0.3 台」。這類工項一律按確定量採購。</p>`);
+  }
+  const d = sim.dist;
+  const kind = state.settings.dist || 'pert';
+  const cur = levelOf(it);
+  const convP = R.percentileOfWaste(it.wasteRate, d, kind);
+  const sug = R.suggestServiceLevel(it, state.settings);
+  const rows = PCT_ROWS.map((p) => {
+    const w = R.DISTS[kind].inv(p, d);
+    const q = Q.suggestPurchase({ ...it, wasteRate: w }, state.settings);
+    return `<tr class="${Math.abs(p - cur) < 1e-9 ? 'on' : ''}">
+      <td>P${Math.round(p * 100)}</td><td class="n">${(w * 100).toFixed(2)}%</td>
+      <td class="n">${Q.fmt(q.suggestQty, 2)} ${esc(it.unit)}</td>
+      <td class="n">${Q.fmt(q.orderQty, 2)} ${esc(q.orderUnit)}</td>
+      <td class="n">${q.cost == null ? '—' : Q.fmt(q.cost, 0)}</td>
+      <td><button class="btn sm" data-setsl="${p}">採用</button></td></tr>`;
+  }).join('');
+  // 直方圖用分位數重建，避免把上萬筆樣本搬進畫面
+  const bars = Array.from({ length: 40 }, (_, i) => {
+    const a = R.DISTS[kind].inv(i / 40, d), b = R.DISTS[kind].inv((i + 1) / 40, d);
+    const h = b > a ? 1 / (b - a) : 0;
+    return { h, mid: (a + b) / 2 };
+  });
+  const hmax = Math.max(...bars.map((x) => x.h)) || 1;
+  const curW = R.DISTS[kind].inv(cur, d);
+
+  dialog(`${it.name} — 損耗率分布`, `
+    <p class="hint">${esc(it.code)} · 基準量 ${Q.fmt(sim.base, 2)} ${esc(it.unit)} ·
+    ${esc(R.DISTS[kind].label)}（${(d.min * 100).toFixed(1)}% / ${(d.mode * 100).toFixed(1)}% / ${(d.max * 100).toFixed(1)}%）
+    ${d.source === 'fallback' ? '<span class="chip warn">未設區間，由單點值推得</span>' : ''}</p>
+    <div class="hist2">${bars.map((x) => `<i class="${x.mid <= curW ? 'hl' : ''}" style="height:${Math.max(2, (x.h / hmax) * 100)}%"></i>`).join('')}</div>
+    <div class="hint" style="display:flex;justify-content:space-between"><span>${(d.min * 100).toFixed(1)}%</span><span>損耗率</span><span>${(d.max * 100).toFixed(1)}%</span></div>
+    ${convP != null ? `<p class="chip ${convP < 0.5 ? 'bad' : 'warn'}" style="display:block;padding:8px 10px;margin-top:10px">
+      你慣用的單點 ${(it.wasteRate * 100).toFixed(1)}% 相當於 <b>P${Math.round(convP * 100)}</b> ——
+      約有 <b>${Math.round((1 - convP) * 100)}%</b> 的機率會不夠。</p>` : ''}
+    <table class="pct" style="margin-top:10px">
+      <thead><tr><th>服務水準</th><th style="text-align:right">損耗率</th><th style="text-align:right">建議採購量</th><th style="text-align:right">下單量</th><th style="text-align:right">預估金額</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="hint" style="margin-top:10px">系統建議 <b>P${Math.round(sug.p * 100)}</b>：${esc(sug.why)}。
+    服務水準是<b>決策</b>不是計算 —— 缺料停工的代價越高就該備越多。這裡不替你決定，只把代價攤開。</p>
+    <p class="hint">區間為業界慣例值，不是貴司實證資料。累積 5 筆以上「理論量 vs 實際領用量」即可用實績校準取代。</p>`,
+    [{ label: '關閉' }], (body) => {
+      body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-setsl]'); if (!b) return;
+        it.serviceLevel = parseFloat(b.dataset.setsl);
+        $('#dlg').close(); renderAll();
+      });
+    });
+}
+
+function openPortfolioSim() {
+  const list = selectedItems();
+  if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要模擬的工項。</p>');
+  if (!state.settings.stochastic) return dialog('機率模式已關閉', '<p>請先到「參數」開啟機率模式。</p>');
+  const s = state.settings;
+  const run = (rho) => R.simulatePortfolio(list, s, { correlation: rho });
+  const r = run(s.correlation);
+  if (!r) return dialog('無法模擬', '<p>已選工項都沒有有效的基準量。</p>');
+  const indep = run(0);
+  const full = run(1);
+  const stochN = r.items.filter((x) => x.stochastic).length;
+
+  dialog('整包風險模擬', `
+    <p class="hint">${list.length} 項（其中 ${stochN} 項有損耗分布）· ${Q.fmt(r.iterations)} 次模擬 ·
+    ${esc(R.DISTS[r.dist].label)} · 相關係數 ρ=${r.correlation} · 種子 ${r.seed}</p>
+
+    <table class="pct" style="margin-top:10px">
+      <thead><tr><th>金額分位</th><th style="text-align:right">預估金額</th><th style="text-align:right">較 P50</th></tr></thead>
+      <tbody>${PCT_ROWS.map((p) => {
+        const k = `p${Math.round(p * 100)}`;
+        return `<tr class="${Math.abs(p - (s.serviceLevel ?? 0.8)) < 1e-9 ? 'on' : ''}">
+          <td>P${Math.round(p * 100)}</td><td class="n">NT$ ${Q.fmt(r.cost[k], 0)}</td>
+          <td class="n">${p === 0.5 ? '—' : (r.cost[k] >= r.cost.p50 ? '+' : '') + Q.fmt(r.cost[k] - r.cost.p50, 0)}</td></tr>`;
+      }).join('')}</tbody></table>
+
+    <h4 style="margin:14px 0 6px">兩個容易算錯的地方</h4>
+    <table class="pct">
+      <tbody>
+        <tr><td>各項 P80 直接相加</td><td class="n">NT$ ${Q.fmt(r.sumOfP80, 0)}</td><td class="hint">常見做法</td></tr>
+        <tr class="on"><td>整包 P80（正確）</td><td class="n">NT$ ${Q.fmt(r.portfolioP80, 0)}</td><td class="hint">同時全部用到悲觀值的機率極低</td></tr>
+        <tr><td><b>分散效益</b></td><td class="n"><b>NT$ ${Q.fmt(r.diversification, 0)}</b></td><td class="hint">相加會多抓這麼多</td></tr>
+      </tbody></table>
+    <table class="pct" style="margin-top:10px">
+      <tbody>
+        <tr><td>ρ=0（各項獨立）</td><td class="n">NT$ ${Q.fmt(indep.cost.p80, 0)}</td><td class="hint">會低估風險</td></tr>
+        <tr class="on"><td>ρ=${r.correlation}（本案設定）</td><td class="n">NT$ ${Q.fmt(r.cost.p80, 0)}</td><td class="hint">同工班／同工法的正相關</td></tr>
+        <tr><td>ρ=1（完全同步）</td><td class="n">NT$ ${Q.fmt(full.cost.p80, 0)}</td><td class="hint">等同各項 P80 相加</td></tr>
+      </tbody></table>
+    <p class="hint" style="margin-top:10px">
+      <b>各項 P80 相加不等於整包 P80。</b> 每一項都同時走到悲觀值的機率極低，所以整包的 P80 比較低 ——
+      這筆差額就是分散效益。但若把各項當成完全獨立（ρ=0），又會反過來低估風險，因為同一個工班在同一個工地，
+      損耗是會一起變差的。ρ 預設 0.3 是保守的折衷，可在參數調整。</p>
+    <p class="hint">收斂指標 ${(r.convergence * 100).toFixed(2)}%（前後半樣本的 P80 差異）。
+      ${r.convergence > 0.02 ? '<b style="color:var(--warn)">超過 2%，建議提高迭代次數。</b>' : '低於 2%，迭代次數足夠。'}</p>`,
+    [{ label: '關閉' }, { label: '匯出模擬 CSV', fn: () => exportSimCsv(r) }]);
+}
+
+function exportSimCsv(r) {
+  const head = ['工項代碼', '名稱', '單位', '基準量', '是否機率', 'P5', 'P50', 'P80', 'P90', 'P95', '平均', '標準差'];
+  const lines = [
+    [`模擬參數,迭代 ${r.iterations},分布 ${r.dist},相關係數 ${r.correlation},種子 ${r.seed}`],
+    [`整包金額,P50 ${r.cost.p50},P80 ${r.cost.p80},P90 ${r.cost.p90},各項P80相加 ${r.sumOfP80},分散效益 ${r.diversification}`],
+    [],
+    head,
+    ...r.items.map((x) => [x.code, x.name, x.unit, x.base, x.stochastic ? '是' : '否',
+      x.qty.p5, x.qty.p50, x.qty.p80, x.qty.p90, x.qty.p95, x.qty.mean, x.qty.sd]),
+  ].map((row) => row.map(csvCell).join(','));
+  download(`風險模擬-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
+}
+
 /* ══════════ 基準版 / 請購單 ══════════ */
 
 function pkgItems(pkg) { return pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean); }
@@ -912,7 +1060,7 @@ function baselineDiffIndex() {
   for (const pkg of state.packages) {
     const bl = latestBaseline(pkg.code);
     if (!bl) continue;
-    const d = B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings);
+    const d = B.diffAgainstBaseline(pricedAll(pkgItems(pkg)), bl, state.settings);
     for (const ch of d.changed) idx.set(ch.code, { bl, fields: ch.fields });
   }
   return idx;
@@ -928,7 +1076,7 @@ function renderBaselines() {
   const byId = new Map(state.baselines.map((b) => [b.id, b]));
   host.innerHTML = state.baselines.slice().reverse().map((bl) => {
     const pkg = state.packages.find((p) => p.code === bl.packageCode);
-    const d = pkg ? B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings) : null;
+    const d = pkg ? B.diffAgainstBaseline(pricedAll(pkgItems(pkg)), bl, state.settings) : null;
     const isLatest = latestBaseline(bl.packageCode) === bl;
     const prs = state.prs.filter((p) => p.baselineId === bl.id);
     return `<div class="bl">
@@ -957,7 +1105,7 @@ function renderBaselines() {
 function openFreeze(pkgIdx) {
   const pkg = state.packages[pkgIdx];
   if (!pkg) return;
-  const items = pkgItems(pkg);
+  const items = pricedAll(pkgItems(pkg));
   const prev = latestBaseline(pkg.code);
   const d = prev ? B.diffAgainstBaseline(items, prev, state.settings) : null;
   const s = Q.summarize(items, state.settings);
@@ -1008,7 +1156,7 @@ function openBaselineDiff(id) {
   const bl = state.baselines.find((b) => b.id === id);
   const pkg = bl && state.packages.find((p) => p.code === bl.packageCode);
   if (!bl || !pkg) return;
-  const d = B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings);
+  const d = B.diffAgainstBaseline(pricedAll(pkgItems(pkg)), bl, state.settings);
   const fmtV = (v, kind) => (kind === 'number' ? Q.fmt(v, 2) : esc(String(v ?? '')));
   dialog(`較 ${bl.code} 的變更`, `
     <p>金額差 <b class="${d.costDelta >= 0 ? 'neg' : 'pos'}">${d.costDelta >= 0 ? '+' : ''}${Q.fmt(d.costDelta, 0)}</b></p>
@@ -1160,6 +1308,7 @@ function openSourceDialog(code) {
   const it = state.itemByCode.get(code);
   const res = Q.resolveBasis(it, state.settings);
   const pay = Q.paymentImpact(it, state.settings);
+  const wd = R.wasteDistOf(it, state.settings);
   const rows = Q.BASIS_PRIORITY.map((k) => {
     const meta = Q.SOURCE_META[k];
     const v = it.qty[k];
@@ -1178,7 +1327,13 @@ function openSourceDialog(code) {
     <div class="fgrid" style="margin-top:12px">
       <div><label class="f">人工確認 — 簽核人</label><input type="text" id="mBy" value="${esc(it.manualBy || '')}" placeholder="姓名／職稱"></div>
       <div><label class="f">人工確認 — 理由</label><input type="text" id="mNote" value="${esc(it.manualNote || '')}" placeholder="為什麼改這個數字"></div>
-      <div><label class="f">損耗率</label><input type="number" id="mWaste" step="0.005" min="0" value="${it.wasteRate ?? state.settings.defaultWasteRate}"></div>
+      <div><label class="f">損耗率 最可能</label><input type="number" id="mWaste" step="0.005" min="0" value="${it.wasteRate ?? state.settings.defaultWasteRate}"></div>
+      <div><label class="f">損耗率 樂觀</label><input type="number" id="mWmin" step="0.005" min="0" value="${wd.min}"></div>
+      <div><label class="f">損耗率 悲觀</label><input type="number" id="mWmax" step="0.005" min="0" value="${wd.max}"></div>
+      <div><label class="f">服務水準</label><select id="mSl">
+        ${[0.5, 0.8, 0.85, 0.9, 0.95].map((v) => `<option value="${v}" ${Math.abs(levelOf(it) - v) < 1e-9 ? 'selected' : ''}>P${Math.round(v * 100)}</option>`).join('')}
+        <option value="" ${Q.isNum(it.serviceLevel) ? '' : 'selected'}>沿用預設 P${Math.round((state.settings.serviceLevel ?? 0.8) * 100)}</option>
+      </select></div>
       <div><label class="f">單價 (NT$/${esc(it.unit)})</label><input type="number" id="mPrice" step="0.01" value="${it.unitPrice ?? ''}"></div>
       <div><label class="f">訂購單位</label><input type="text" id="oUnit" value="${esc(it.order.unit || it.unit)}"></div>
       <div><label class="f">每訂購單位含量 (${esc(it.unit)})</label><input type="number" id="oFactor" step="0.001" value="${it.order.unitFactor ?? 1}"></div>
@@ -1202,6 +1357,10 @@ function openSourceDialog(code) {
         it.manualBy = $('#mBy').value.trim();
         it.manualNote = $('#mNote').value.trim();
         const w = parseFloat($('#mWaste').value); it.wasteRate = Number.isFinite(w) ? w : it.wasteRate;
+        const lo = parseFloat($('#mWmin').value), hi = parseFloat($('#mWmax').value);
+        if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo) it.wasteDist = { min: lo, mode: it.wasteRate, max: hi };
+        const sl = $('#mSl').value;
+        if (sl === '') delete it.serviceLevel; else it.serviceLevel = parseFloat(sl);
         const pr = parseFloat($('#mPrice').value); it.unitPrice = Number.isFinite(pr) ? pr : null;
         it.erpCode = $('#mErp').value.trim();
         it.order = {
@@ -1262,6 +1421,20 @@ function openSettings() {
     總價承攬下同一個數字是承包商要吸收的成本。這一欄決定你看到的是機會還是風險。</p>
     <p class="hint" style="margin-top:10px">門檻是風險偏好的具體化：把 3% 調到 8%，等於宣告「圖面與標單差 8% 以內都不必解釋」。
     這個數字最終要由誰承擔差異的責任來決定，不是由方便決定。</p>
+    <h4 style="margin:14px 0 6px">損耗率機率模型</h4>
+    <div class="fgrid">
+      <div><label class="f">機率模式</label><select id="sStoch">
+        <option value="1" ${s.stochastic !== false ? 'selected' : ''}>開啟（P50/P80）</option>
+        <option value="0" ${s.stochastic === false ? 'selected' : ''}>關閉（單點損耗率）</option></select></div>
+      <div><label class="f">分布</label><select id="sDist">${Object.values(R.DISTS).map((x) => `<option value="${x.key}" ${(s.dist || 'pert') === x.key ? 'selected' : ''}>${x.label}</option>`).join('')}</select></div>
+      <div><label class="f">預設服務水準</label><select id="sSl">${[0.5, 0.8, 0.85, 0.9, 0.95].map((v) => `<option value="${v}" ${Math.abs((s.serviceLevel ?? 0.8) - v) < 1e-9 ? 'selected' : ''}>P${Math.round(v * 100)}</option>`).join('')}</select></div>
+      <div><label class="f">相關係數 ρ</label><input type="number" id="sRho" step="0.05" min="0" max="1" value="${s.correlation ?? 0.3}"></div>
+      <div><label class="f">模擬次數</label><input type="number" id="sIter" step="1000" min="500" value="${s.iterations ?? 10000}"></div>
+      <div><label class="f">亂數種子</label><input type="number" id="sSeed" step="1" value="${s.seed ?? 20260913}"></div>
+    </div>
+    <p class="hint" style="margin-top:8px">關閉機率模式就回到單點損耗率 —— 你現有報表的 1,751 是這樣算出來的。
+    ρ 是同工班／同工法造成的正相關：設 0 會低估整包風險，設 1 等於各項分位數直接相加。
+    種子固定才能重現 —— 採購數字不能每按一次就變。</p>
     <h4 style="margin:14px 0 6px">請購單與 ERP</h4>
     <div class="fgrid">
       <div><label class="f">PR 編號樣板</label><input type="text" id="sPrTpl" value="${esc(s.prTemplate || B.DEFAULT_PR_TEMPLATE)}"></div>
@@ -1292,6 +1465,12 @@ function openSettings() {
         const tx = parseFloat($('#sTax').value); s.taxRate = Number.isFinite(tx) ? tx : 0.05;
         s.dept = $('#sDept').value.trim();
         s.requireErpCode = $('#sReqErp').value === '1';
+        s.stochastic = $('#sStoch').value === '1';
+        s.dist = $('#sDist').value;
+        s.serviceLevel = parseFloat($('#sSl').value);
+        const rho = parseFloat($('#sRho').value); s.correlation = Number.isFinite(rho) ? Math.min(Math.max(rho, 0), 1) : 0.3;
+        const it2 = parseInt($('#sIter').value, 10); s.iterations = Number.isFinite(it2) && it2 >= 500 ? it2 : 10000;
+        const sd = parseInt($('#sSeed').value, 10); s.seed = Number.isFinite(sd) ? sd : 20260913;
         if (state.analysis) runAnalysis();
         renderAll();
       },
@@ -1338,7 +1517,7 @@ function toPackage() {
   const blockMap = rfiBlockMap();
   const ok = [], bad = [];
   for (const it of list) {
-    const p = Q.suggestPurchase(it, state.settings);
+    const p = Q.suggestPurchase(priced(it), state.settings);
     const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
     const rfiWhy = blockMap.get(it.code);
     (p.blocked || !Q.bandAtLeast(c.band, state.settings.gateBand) || rfiWhy)
@@ -1377,7 +1556,7 @@ function toPackage() {
 function autoPackage() {
   const list = selectedItems();
   if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要打包的工項，或在左側勾選整個分類。</p>');
-  const r = Q.suggestPackages(list, state.settings, { blocked: rfiBlockMap() });
+  const r = Q.suggestPackages(pricedAll(list), state.settings, { blocked: rfiBlockMap() });
   if (!r.packages.length) {
     return dialog('無法建議拆包', `<p>已選的 ${list.length} 項全部未達門檻，沒有可打包的工項。</p>
       <ul style="margin:6px 0 0 18px;padding:0">${r.excluded.map((e) => `<li>${esc(e.name)} — ${esc(e.reason)}</li>`).join('')}</ul>`);
@@ -1446,7 +1625,7 @@ function download(name, text, mime = 'text/csv;charset=utf-8') {
 }
 
 function itemRow(it) {
-  const p = Q.suggestPurchase(it, state.settings);
+  const p = Q.suggestPurchase(priced(it), state.settings);
   const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
   const v = Q.variance(it.qty.drawing, it.qty.boq);
   const pay = Q.paymentImpact(it, state.settings);
@@ -2058,4 +2237,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, runAnalysis, renderAll };
+window.__takeoff = { state, Q, DXF, A, B, R, runAnalysis, renderAll };

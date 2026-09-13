@@ -100,7 +100,9 @@ ok('BOM 表格有列', await page.locator('#boqBody tr[data-code]').count() > 10
 const cable = page.locator('tr[data-code="321.01"]');
 ok('附件一工項存在', await cable.count() === 1);
 const sug = (await cable.locator('td.sug').innerText()).trim();
-ok('建議採購量 = 1,751 M', sug.startsWith('1,751'), sug);
+ok('預設 P80 建議採購量 = 1,777.14 M', sug.startsWith('1,777.14'), sug);
+const wasteCell = (await cable.locator('td').nth(8).innerText()).trim();
+ok('損耗率欄顯示有效值與服務水準', wasteCell.includes('4.54') && wasteCell.includes('P80'), wasteCell);
 const varChip = (await cable.locator('td').nth(5).innerText()).trim();
 ok('差異顯示 +60 / 3.6%', varChip.includes('60') && varChip.includes('3.6'), varChip);
 const band = (await cable.locator('[data-conf]').innerText()).trim();
@@ -136,9 +138,9 @@ await page.waitForSelector('#dlg[open]', { state: 'hidden' });
 const cat6b = (await page.locator('tr[data-code="710.01"]').innerText());
 ok('人工確認後解除鎖定', !cat6b.includes('鎖定'), cat6b.replace(/\s+/g, ' ').slice(0, 120));
 const sug2 = (await page.locator('tr[data-code="710.01"] td.sug').innerText()).trim();
-ok('5600 × 1.08 = 6,048 M', sug2.startsWith('6,048'), sug2);
+ok('人工確認 5600 套 P80 損耗 → 6,225.78 M', sug2.startsWith('6,225.78'), sug2);
 const order2 = (await page.locator('tr[data-code="710.01"] td').nth(10).innerText()).trim();
-ok('305M/箱 → 20 箱', order2.startsWith('20 箱'), order2);
+ok('305M/箱 → 21 箱（P80 多一箱）', order2.startsWith('21 箱'), order2);
 
 console.log('\n【5】DXF 載入與圖層自動抓量');
 await page.locator('#tabView').click();
@@ -213,6 +215,76 @@ const assigned = await page.evaluate(() => {
 });
 ok('量測值寫入圖面量', Math.abs(assigned.q - 15) / 15 < 0.01, JSON.stringify(assigned));
 ok('標記為實測且記錄校正方式', assigned.src === 'measure' && assigned.cal === 'two-point', JSON.stringify(assigned));
+
+console.log('\n【6b】損耗率機率模型');
+await page.locator('#tabList').click();
+await page.locator('tr[data-code="321.01"] td.sug [data-dist]').click();
+await page.waitForSelector('#dlg[open]');
+const distTxt = await page.locator('#dlgBody').innerText();
+ok('分布對話框列出 P5/P50/P80/P90/P95', ['P5', 'P50', 'P80', 'P90', 'P95'].every((x) => distTxt.includes(x)));
+ok('揭露慣用單點值相當於第幾百分位', /相當於\s*P3\d/.test(distTxt) && distTxt.includes('機率會不夠'), distTxt.replace(/\s+/g, ' ').slice(0, 140));
+ok('給出服務水準建議與理由', distTxt.includes('系統建議') && distTxt.includes('缺料'), '');
+ok('標明區間為慣例值非實證資料', distTxt.includes('慣例值') && distTxt.includes('實證'), '');
+// 採用 P95 後數量應變大
+const before95 = await page.evaluate(() => window.__takeoff.Q.suggestPurchase(
+  window.__takeoff.R.withServiceLevel(window.__takeoff.state.itemByCode.get('321.01'), window.__takeoff.state.settings),
+  window.__takeoff.state.settings).suggestQty);
+await page.locator('#dlgBody [data-setsl="0.95"]').click();
+await page.waitForTimeout(200);
+const after95 = await page.evaluate(() => window.__takeoff.state.itemByCode.get('321.01').serviceLevel);
+ok('可就地改用 P95', after95 === 0.95);
+const sug95 = (await page.locator('tr[data-code="321.01"] td.sug').innerText()).trim();
+ok('P95 採購量高於 P80', parseFloat(sug95.replace(/,/g, '')) > before95, sug95);
+await page.evaluate(() => { delete window.__takeoff.state.itemByCode.get('321.01').serviceLevel; window.__takeoff.renderAll(); });
+
+// 計數類不該有假分布
+await page.locator('tr[data-code="310.01"] td.sug').click();
+const cntHasBtn = await page.locator('tr[data-code="310.01"] td.sug [data-dist]').count();
+ok('計數類不提供分布（6 台配電盤沒有損耗分布）', cntHasBtn === 0);
+
+console.log('\n【6c】整包風險模擬');
+await page.evaluate(() => {
+  window.__takeoff.state.selected = new Set(window.__takeoff.state.items.filter((i) => ['length', 'area'].includes(i.measureType)).map((i) => i.code));
+  window.__takeoff.renderAll();
+});
+await page.locator('#btnSim').click();
+await page.waitForSelector('#dlg[open]');
+const simTxt = await page.locator('#dlgBody').innerText();
+ok('列出整包金額分位', simTxt.includes('整包 P80') && simTxt.includes('各項 P80 直接相加'));
+ok('揭露分散效益', simTxt.includes('分散效益'));
+ok('對照 ρ=0 / ρ=設定 / ρ=1', simTxt.includes('各項獨立') && simTxt.includes('完全同步'));
+ok('回報收斂指標', simTxt.includes('收斂指標'));
+const simNums = await page.evaluate(() => {
+  const { R, state } = window.__takeoff;
+  const list = state.items.filter((i) => state.selected.has(i.code));
+  const a = R.simulatePortfolio(list, state.settings, { correlation: state.settings.correlation });
+  const b = R.simulatePortfolio(list, state.settings, { correlation: 0 });
+  return { sum: a.sumOfP80, port: a.portfolioP80, div: a.diversification, indep: b.cost.p80, conv: a.convergence };
+});
+ok('各項 P80 相加 > 整包 P80', simNums.sum > simNums.port, JSON.stringify(simNums));
+ok('獨立假設會低估整包 P80', simNums.indep < simNums.port, JSON.stringify(simNums));
+ok('收斂指標 < 2%', simNums.conv < 0.02, String(simNums.conv));
+const simDl = page.waitForEvent('download');
+await page.locator('#dlgFoot button').filter({ hasText: '匯出' }).click();
+const simCsv = await readFile(await (await simDl).path(), 'utf8');
+ok('模擬 CSV 含參數與逐項分位', simCsv.includes('模擬參數') && simCsv.includes('分散效益') && simCsv.includes('P80'));
+await page.waitForTimeout(200);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').first().click();
+
+console.log('\n【6d】關閉機率模式回到你現有報表的數字');
+await page.locator('#btnSettings').click();
+await page.waitForSelector('#dlg[open]');
+await page.selectOption('#sStoch', '0');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(250);
+const sugDet = (await page.locator('tr[data-code="321.01"] td.sug').innerText()).trim();
+ok('關閉機率模式 → 1,751 M（附件一的數字）', sugDet.startsWith('1,751'), sugDet);
+await page.locator('#btnSettings').click();
+await page.waitForSelector('#dlg[open]');
+await page.selectOption('#sStoch', '1');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(250);
+await page.evaluate(() => { window.__takeoff.state.selected = new Set(); window.__takeoff.renderAll(); });
 
 console.log('\n【7a】RFI 狀態流');
 await page.locator('#tabScan').click();
@@ -323,7 +395,7 @@ await page.locator('#eSel').click();
 const file = await dl;
 const csv = await readFile(await file.path(), 'utf8');
 ok('CSV 含表頭與稽核欄', csv.includes('正式採購基準') && csv.includes('判定規則') && csv.includes('數量出處'));
-ok('CSV 含 1751 建議採購量', csv.includes('1751'), csv.split('\n')[1] || '');
+ok('CSV 含 P80 建議採購量（全精度）', csv.includes('1777.1'), (csv.split('\n')[1] || '').slice(0, 120));
 
 console.log('\n【7b】合約型態與計價影響');
 const payTxt = await page.locator('tr[data-code="620.01"] .pay').innerText();

@@ -1,7 +1,7 @@
 {
   "version": "2.0",
   "name": "工程量清單範本（100–900 九大類編碼）",
-  "note": "階層採貴司自有編碼：100 土建／200 裝修／300 電氣／400 給排水／500 消防／600 空調／700 弱電／800 設備／900 其他。此為可編輯範本，非契約文件。",
+  "note": "階層採貴司自有編碼：100 土建／200 裝修／300 電氣／400 給排水／500 消防／600 空調／700 弱電／800 設備／900 其他。此為可編輯範本，非契約文件。 損耗區間為業界慣例值，非貴司實證資料；可由歷史實績校準取代。",
   "settings": {
     "currency": "TWD",
     "defaultWasteRate": 0.03,
@@ -9,7 +9,13 @@
     "varianceStop": 0.1,
     "gateBand": "C",
     "contractType": "remeasure",
-    "longLeadDays": 90
+    "longLeadDays": 90,
+    "stochastic": true,
+    "simDist": "pert",
+    "simIterations": 10000,
+    "simSeed": 20260913,
+    "simCorrelation": 0.3,
+    "serviceLevel": 0.8
   },
   "nodes": [
     {
@@ -322,7 +328,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.03,
+        "max": 0.08
+      }
     },
     {
       "code": "321.02",
@@ -352,7 +363,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.03,
+        "max": 0.08
+      }
     },
     {
       "code": "322.01",
@@ -380,7 +396,12 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.08,
+        "max": 0.15
+      }
     },
     {
       "code": "350.01",
@@ -409,7 +430,12 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": false,
-      "coverage": "partial"
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
     },
     {
       "code": "320.01",
@@ -439,7 +465,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
     },
     {
       "code": "323.01",
@@ -469,7 +500,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.04,
+        "max": 0.09
+      }
     },
     {
       "code": "310.01",
@@ -616,7 +652,12 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": false,
-      "coverage": "partial"
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.05,
+        "mode": 0.08,
+        "max": 0.18
+      }
     },
     {
       "code": "720.01",
@@ -675,7 +716,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
     },
     {
       "code": "420.01",
@@ -704,7 +750,12 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.06,
+        "max": 0.14
+      }
     },
     {
       "code": "450.01",
@@ -792,7 +843,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
     },
     {
       "code": "520.01",
@@ -880,7 +936,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.11
+      }
     },
     {
       "code": "630.01",
@@ -910,7 +971,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.08,
+        "mode": 0.12,
+        "max": 0.22
+      }
     },
     {
       "code": "610.01",
@@ -969,7 +1035,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.01,
+        "mode": 0.03,
+        "max": 0.06
+      }
     },
     {
       "code": "150.01",
@@ -998,7 +1069,12 @@
       "drawingSource": "measure",
       "closed": false,
       "layerMapped": true,
-      "coverage": "partial"
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
     },
     {
       "code": "140.01",
@@ -1027,7 +1103,12 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.04,
+        "max": 0.09
+      }
     },
     {
       "code": "210.01",
@@ -1057,7 +1138,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.07,
+        "max": 0.15
+      }
     },
     {
       "code": "230.01",
@@ -1087,7 +1173,12 @@
       "calibration": "declared-scale",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.06,
+        "mode": 0.1,
+        "max": 0.2
+      }
     },
     {
       "code": "240.01",
