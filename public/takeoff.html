@@ -25,6 +25,15 @@
     --paper:#f8fafc;
   }
 }
+/* 明確選了深色的宿主（例如 Artifact 檢視器在淺色系統上切成深色）：
+   只靠 prefers-color-scheme 接不到，必須另外再定義一次。 */
+:root[data-theme="dark"]{
+    --bg:#0b1120; --panel:#111a2e; --line:#22304d; --line2:#1a2540;
+    --ink:#e8eefc; --ink2:#9fb0cc; --ink3:#64748b;
+    --accent:#60a5fa; --accent-soft:#16243f;
+    --ok:#4ade80; --ok-bg:#10261a; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2c1414;
+    --paper:#f8fafc;
+}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);-webkit-text-size-adjust:100%}
