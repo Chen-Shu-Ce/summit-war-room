@@ -26,6 +26,7 @@ await new Promise((r) => server.listen(0, r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
 let pass = 0, fail = 0;
+const S_diff = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
 const ok = (name, cond, extra = '') => { cond ? (pass++, console.log('  ok  ', name)) : (fail++, console.log('  FAIL', name, extra)); };
 
 const browser = await chromium.launch();
@@ -512,12 +513,126 @@ ok('ERP CSV 帶出 PR 單號', headerCsv.includes(pr.no));
 await page.waitForTimeout(300);
 if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').first().click();
 
+console.log('\n【7e】施工工序');
+await page.locator('#tabSeq').click();
+ok('未載入工序時說明工序的用途', (await page.locator('#seqBody').innerText()).includes('誰卡誰'));
+await page.locator('#btnSeqLoad').click();
+await page.waitForSelector('#dlg[open]');
+const loadTxt = await page.locator('#dlgBody').innerText();
+ok('載入工序範本', /載入\s*63\s*道工序/.test(loadTxt), loadTxt.replace(/\s+/g, ' ').slice(0, 80));
+ok('載入時即聲明範本為工程慣例非圖說要求', loadTxt.includes('工程慣例') && loadTxt.includes('建議工序'), '');
+await page.locator('#dlgFoot button').last().click();
+await page.fill('#seqStart', '2026-09-14');
+await page.waitForTimeout(250);
+
+const sch = await page.evaluate(() => {
+  const r = window.__takeoff.state.sched;
+  return { n: r.tasks.length, start: r.projectStart, finish: r.projectFinish, crit: r.criticalPath, cyc: r.cyclic.length, miss: r.missingPreds.length };
+});
+ok('排程無迴圈、無缺漏前置', sch.cyc === 0 && sch.miss === 0, JSON.stringify(sch));
+ok('要徑抓到長交期的冰水主機', sch.crit.some((c) => c.startsWith('610')), sch.crit.join(','));
+const statTxt = await page.locator('#seqStat').innerText();
+ok('狀態列顯示要徑、Gate、建議工序數', statTxt.includes('要徑') && statTxt.includes('Gate') && statTxt.includes('建議工序'), statTxt);
+
+// 工序樹
+const treeTxt = await page.locator('#seqBody').innerText();
+ok('工序樹依 WBS 分組', treeTxt.includes('410') && treeTxt.includes('給水'));
+ok('明確警示建議工序不是圖說要求', treeTxt.includes('工程慣例，不是圖說要求'), '');
+ok('標出隱蔽工程', treeTxt.includes('隱蔽'));
+
+// Gate：點一下切換狀態，下游解除阻擋
+const countBlockedBy = (code) => page.evaluate((c) => {
+  const { S, state } = window.__takeoff;
+  let n = 0;
+  for (const gates of S.gateBlocks(state.sched.tasks).values()) if (gates.some((g) => g.code === c)) n++;
+  return n;
+}, code);
+const gateBefore = await page.evaluate(() => window.__takeoff.S.gateBlocks(window.__takeoff.state.sched.tasks).size);
+ok('有工序被未通過的 Gate 擋住', gateBefore > 0, '被擋 ' + gateBefore);
+const byPressureBefore = await countBlockedBy('410-080');
+ok('試壓 Gate 擋住多道下游工序', byPressureBefore > 0, '擋住 ' + byPressureBefore);
+await page.locator('[data-gate="410-080"]').first().click();
+await page.waitForTimeout(200);
+const gs = await page.evaluate(() => window.__takeoff.state.tasks.find((t) => t.code === '410-080').gateStatus);
+ok('點擊 Gate 可切換為 Pass', gs === 'pass');
+ok('該 Gate 通過後不再擋任何工序', await countBlockedBy('410-080') === 0);
+const gateAfter = await page.evaluate(() => window.__takeoff.S.gateBlocks(window.__takeoff.state.sched.tasks).size);
+ok('但仍被其他未通過的 Gate 擋住（阻擋是逐個 Gate 判定）', gateAfter > 0 && gateAfter <= gateBefore, `${gateBefore} → ${gateAfter}`);
+
+// 關聯表：十六欄
+await page.locator('#seqView [data-sv="table"]').click();
+await page.waitForTimeout(200);
+const cols = await page.locator('#seqBody table.seq thead th').allInnerTexts();
+ok('關聯表恰為規定的十六欄', cols.length === 16, String(cols.length));
+for (const c of ['SequenceCode', 'WBS', '工序名稱', '前置工序', '關聯FS/SS', '使用BOM', '是否隱蔽', '是否Gate', '來源圖號', '可信度']) {
+  ok(`關聯表含欄位「${c}」`, cols.includes(c), cols.join('|'));
+}
+const tblTxt = await page.locator('#seqBody').innerText();
+ok('關聯表顯示 FS/SS 關聯', /FS/.test(tblTxt) && /SS/.test(tblTxt));
+
+// 泳道圖
+await page.locator('#seqView [data-sv="lane"]').click();
+await page.waitForTimeout(250);
+ok('泳道圖依工種分道', await page.locator('#seqBody .lane').count() >= 5);
+const laneNames = await page.locator('#seqBody .lane .lname').allInnerTexts();
+ok('泳道含給排水與品管', laneNames.includes('給排水') && laneNames.includes('品管'), laneNames.join(','));
+ok('泳道圖有工序條塊', await page.locator('#seqBody .bar').count() > 20);
+ok('要徑以紅色標示', await page.locator('#seqBody .bar.crit').count() > 0);
+ok('Gate 以菱形標示', (await page.locator('#seqBody').innerText()).includes('◆'));
+
+// 材料需求日：反推鏈
+await page.locator('#seqView [data-sv="mat"]').click();
+await page.waitForTimeout(250);
+const matTxt = await page.locator('#seqBody').innerText();
+ok('材料需求日表列出完整反推鏈', ['需求進場日', '最晚核准日', '最晚送審日', '建議發包日', '建議PR日'].every((x) => matTxt.includes(x)));
+ok('說明 Lead 從送審核准後起算', matTxt.includes('送審核准後') && matTxt.includes('不是從下單起算'), '');
+const chain = await page.evaluate(() => {
+  const { S, state } = window.__takeoff;
+  const opts = { siteBufferDays: 3, prToPoDays: 7, submittalDays: 14 };
+  const chains = S.materialChains(state.sched.tasks, state.items, opts);
+  const c = chains.find((x) => x.itemCode === '610.01');
+  return c ? { task: c.taskCode, site: c.needOnSite, appr: c.approveBy, sub: c.submitBy, po: c.poBy, pr: c.prBy, lead: c.leadTimeDays } : null;
+});
+ok('冰水主機反推出完整日期鏈', !!chain, JSON.stringify(chain));
+ok('核准到進場 = Lead 天數', chain && S_diff(chain.appr, chain.site) === chain.lead, JSON.stringify(chain));
+ok('發包到核准 = 送審 14 天', chain && S_diff(chain.sub, chain.appr) === 14, JSON.stringify(chain));
+ok('PR 到發包 = 內部核決 7 天', chain && S_diff(chain.pr, chain.po) === 7, JSON.stringify(chain));
+ok('材料鏈不把送審當消耗點（送審那天材料不必進場）', chain && chain.task !== '610-010', chain && chain.task);
+
+// 最早可行開工日：整片紅字時必須給出可執行的答案
+ok('逾期時顯示最早可行開工日', matTxt.includes('最早可行開工日') || !matTxt.includes('已逾期'), '');
+if (matTxt.includes('最早可行開工日')) {
+  const before = await page.locator('#seqStart').inputValue();
+  const suggested = await page.locator('#btnFeasApply').getAttribute('data-start');
+  ok('建議開工日晚於目前開工日', suggested > before, `${before} → ${suggested}`);
+  await page.locator('#btnFeasApply').click();
+  await page.waitForTimeout(350);
+  ok('套用後開工日改為建議值', (await page.locator('#seqStart').inputValue()) === suggested);
+  const after = await page.evaluate(() => {
+    const { S, state } = window.__takeoff;
+    const chains = S.materialChains(state.sched.tasks, state.items, { siteBufferDays: 3, prToPoDays: 7, submittalDays: 14, today: new Date() });
+    return chains.filter((c) => c.slackDays < 0).length;
+  });
+  ok('套用後不再有逾期材料', after === 0, `仍逾期 ${after} 項`);
+  // 還原，後面的持久化測試才不受影響
+  await page.evaluate((v) => { const el = document.querySelector('#seqStart'); el.value = v; el.dispatchEvent(new Event('change')); }, before);
+  await page.waitForTimeout(300);
+}
+
+const seqDl = page.waitForEvent('download');
+await page.locator('#btnSeqCsv').click();
+const seqCsv = await readFile(await (await seqDl).path(), 'utf8');
+ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seqCsv.includes('可信度') && seqCsv.includes('浮時'));
+ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
+await page.waitForTimeout(400);
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
 const after = await page.evaluate(() => ({
   baselines: window.__takeoff.state.baselines.length,
   prs: window.__takeoff.state.prs.length,
+  tasks: window.__takeoff.state.tasks.length,
   pkgs: window.__takeoff.state.packages.length,
   manual: window.__takeoff.state.itemByCode.get('710.01').qty.manual,
   draw: window.__takeoff.state.itemByCode.get('321.01').qty.drawing,
@@ -526,6 +641,7 @@ ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預
 ok('人工確認持久化', after.manual === 5600);
 ok('圖面量持久化', Math.abs(after.draw - 9.7124) < 0.001);
 ok('基準版與請購單持久化', after.baselines === 1 && after.prs === 1, JSON.stringify(after));
+ok('工序持久化', after.tasks === 63, String(after.tasks));
 
 console.log('\n【9】無 JS 例外');
 ok('頁面無未捕捉錯誤', errors.length === 0, errors.slice(0, 3).join(' | '));

@@ -11,6 +11,7 @@ import { Viewer, TOOLS } from './viewer.js';
 import * as A from './analysis.js';
 import * as B from './baseline.js';
 import * as R from './risk.js';
+import * as S from './sequence.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -43,6 +44,10 @@ const state = {
   rfiFilter: 'open',
   baselines: [],       // 已凍結的基準版
   prs: [],             // 已產生的請購單
+  tasks: [],           // 施工工序
+  seqStart: '',        // 專案開工日
+  seqView: 'tree',
+  sched: null,         // 最近一次排程結果
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -104,6 +109,7 @@ function persist() {
       selected: [...state.selected], packages: state.packages, settings: state.settings,
       projName: state.projName, scope: state.scope, rfiLog: state.rfiLog,
       baselines: state.baselines, prs: state.prs,
+      tasks: state.tasks, seqStart: state.seqStart,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -133,6 +139,8 @@ function restore() {
     state.rfiLog = d.rfiLog || {};
     state.baselines = d.baselines || [];
     state.prs = d.prs || [];
+    state.tasks = d.tasks || [];
+    state.seqStart = d.seqStart || '';
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -470,6 +478,28 @@ function wire() {
   $('#tabScan').onclick = () => setMidTab('scan');
   $('#tabList').onclick = () => setMidTab('list');
   $('#tabView').onclick = () => setMidTab('view');
+  $('#tabSeq').onclick = () => setMidTab('seq');
+  $('#seqView').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sv]'); if (!b) return;
+    $$('#seqView [data-sv]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    state.seqView = b.dataset.sv; renderSeq();
+  });
+  $('#btnSeqLoad').onclick = loadSequenceTemplate;
+  $('#btnSeqCsv').onclick = exportSeqCsv;
+  $('#seqStart').onchange = (e) => { state.seqStart = e.target.value; runSchedule(); renderSeq(); persist(); };
+  $('#seqBody').addEventListener('click', (e) => {
+    const g = e.target.closest('[data-gate]');
+    if (g) return cycleGate(g.dataset.gate);
+    const f = e.target.closest('#btnFeasApply');
+    if (f) {
+      state.seqStart = f.dataset.start;
+      $('#seqStart').value = f.dataset.start;
+      runSchedule(); renderSeq(); persist();
+      return;
+    }
+    const d = e.target.closest('[data-task]');
+    if (d) return openTaskDialog(d.dataset.task);
+  });
 
   // 解析中心
   $('#projName').oninput = (e) => { state.projName = e.target.value; persist(); };
@@ -566,12 +596,14 @@ function rangeSelect(a, b, on) {
 }
 
 function setMidTab(t) {
-  const tabs = { scan: '#tabScan', list: '#tabList', view: '#tabView' };
+  const tabs = { scan: '#tabScan', list: '#tabList', view: '#tabView', seq: '#tabSeq' };
   Object.entries(tabs).forEach(([k, sel]) => $(sel).setAttribute('aria-pressed', String(k === t)));
   $('#scanWrap').classList.toggle('on', t === 'scan');
   $('#tableWrap').classList.toggle('on', t === 'list');
   $('#viewWrap').classList.toggle('on', t === 'view');
+  $('#seqWrap').classList.toggle('on', t === 'seq');
   if (t === 'view') requestAnimationFrame(() => { state.viewer.resize(); state.viewer.fit(); });
+  if (t === 'seq') renderSeq();
 }
 
 /* ══════════ 圖面載入 ══════════ */
@@ -922,6 +954,263 @@ function layerValueFor(item, g, toM) {
 }
 
 
+
+
+/* ══════════ 施工工序 ══════════ */
+
+function seqOpts() {
+  return {
+    projectStart: state.seqStart || new Date(),
+    calendar: (state.settings.calendar) || S.DEFAULT_SCHEDULE.calendar,
+    siteBufferDays: state.settings.siteBufferDays ?? 3,
+    submittalDays: state.settings.submittalDays ?? 14,
+    prToPoDays: state.settings.prToPoDays ?? 7,
+  };
+}
+
+function runSchedule() {
+  if (!state.tasks.length) { state.sched = null; return null; }
+  // 每次排程都重新對照文件標註可信度 —— 新載入的規範可能讓某些工序從「建議」升級為「圖說可證」
+  const annotated = S.annotateConfidence(state.tasks.map((t) => ({ ...t, kind: t.kind || S.kindOf(t.name) })), state.docs);
+  state.sched = S.schedule(annotated, seqOpts());
+  return state.sched;
+}
+
+async function loadSequenceTemplate() {
+  if (state.tasks.length && !confirm(`目前已有 ${state.tasks.length} 道工序，載入範本會覆蓋。繼續？`)) return;
+  try {
+    const r = await fetch('./data/sequence-template.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('載入失敗 ' + r.status);
+    const tpl = await r.json();
+    state.tasks = tpl.tasks.map((t) => ({ ...t, kind: S.kindOf(t.name), confidence: 'suggested' }));
+    if (!state.seqStart) {
+      state.seqStart = S.nextWorkday(new Date());
+      $('#seqStart').value = state.seqStart;
+    }
+    state.settings = { ...state.settings, ...(tpl.settings || {}) };
+    runSchedule(); renderSeq(); persist();
+    dialog('工序範本已載入', `<p>載入 <b>${state.tasks.length}</b> 道工序。</p>
+      <p class="chip warn" style="display:block;padding:8px 10px">${esc(tpl.note)}</p>
+      <p class="hint">已載入的圖說／規範會被逐條比對：找得到證據的工序標為「圖說可證」並附出處，
+      找不到的一律維持「建議工序／需工程確認」。目前有
+      <b>${state.sched.tasks.filter((t) => t.confidence === 'drawing').length}</b> 道找到證據。</p>`);
+  } catch (e) { dialog('載入失敗', `<p>${esc(e.message)}</p>`); }
+}
+
+function cycleGate(code) {
+  const t = state.tasks.find((x) => x.code === code);
+  if (!t || !t.isGate) return;
+  const order = ['unchecked', 'pass', 'fail'];
+  t.gateStatus = order[(order.indexOf(t.gateStatus || 'unchecked') + 1) % 3];
+  runSchedule(); renderSeq(); persist();
+}
+
+function taskById(code) { return (state.sched ? state.sched.tasks : state.tasks).find((t) => t.code === code); }
+
+function confChip(t) {
+  const c = S.CONFIDENCE[t.confidence] || S.CONFIDENCE.suggested;
+  return `<span class="chip ${c.level === 'ok' ? 'ok' : 'warn'}" title="${esc(t.evidence ? `${t.evidence.doc} L${t.evidence.line}：${t.evidence.text}` : '找不到圖說證據，屬工程慣例推導')}">${esc(c.label)}</span>`;
+}
+
+function gateChip(t) {
+  if (!t.isGate) return '';
+  const g = S.GATE_STATUS[t.gateStatus || 'unchecked'];
+  return `<button class="chip ${g.level === 'ok' ? 'ok' : g.level === 'bad' ? 'bad' : ''}" data-gate="${esc(t.code)}" title="點擊切換 未檢查 → Pass → Fail">◆ Gate ${esc(g.label)}</button>`;
+}
+
+function renderSeq() {
+  const host = $('#seqBody');
+  const stat = $('#seqStat');
+  if ($('#seqStart') && !$('#seqStart').value && state.seqStart) $('#seqStart').value = state.seqStart;
+  if (!state.tasks.length) {
+    stat.textContent = '尚未載入工序';
+    host.innerHTML = `<div class="hint" style="padding:24px;text-align:center">
+      尚未建立施工工序。按上方「載入工序範本」開始，或匯入專案 JSON。<br><br>
+      工序回答的不是「什麼時候做」，而是<b>誰卡誰</b>：前置工序、FS/SS 關聯、以及哪些節點沒核准不得往下走（Gate）。<br>
+      有了工序，材料的「最晚 PR 日」才能從施工需求反推出來，而不是憑前置期猜。</div>`;
+    return;
+  }
+  const r = state.sched || runSchedule();
+  const blocked = S.gateBlocks(r.tasks);
+  const g = S.gateSummary(r.tasks);
+  const sug = r.tasks.filter((t) => t.confidence !== 'drawing').length;
+  stat.innerHTML = `${r.tasks.length} 道 · ${esc(r.projectStart)} → ${esc(r.projectFinish)} · 要徑 ${r.criticalPath.length} · Gate ${g.pass}/${g.total} 通過 · 建議工序 ${sug}`;
+  stat.className = 'chip ' + (sug ? 'warn' : 'ok');
+
+  const warn = [];
+  if (r.cyclic.length) warn.push(`<p class="chip bad" style="display:block;padding:7px 10px">偵測到迴圈相依：${r.cyclic.map(esc).join('、')} —— 這些工序的日期不可信，請修正前置關係。</p>`);
+  if (r.missingPreds.length) warn.push(`<p class="chip warn" style="display:block;padding:7px 10px">${r.missingPreds.length} 筆前置工序不存在：${r.missingPreds.slice(0, 5).map((m) => esc(`${m.task}←${m.pred}`)).join('、')}</p>`);
+  if (sug) warn.push(`<p class="chip warn" style="display:block;padding:7px 10px">${sug} 道工序在已載入文件中找不到證據，標示為「建議工序／需工程確認」。<b>這些是工程慣例，不是圖說要求</b>，發包前請工程確認。</p>`);
+
+  host.innerHTML = warn.join('') + ({
+    tree: () => renderSeqTree(r, blocked),
+    table: () => renderSeqTable(r),
+    lane: () => renderSeqLanes(r, blocked),
+    mat: () => renderSeqMaterials(r),
+  }[state.seqView] || (() => ''))();
+}
+
+function renderSeqTree(r, blocked) {
+  const nodeByCode = state.nodeByCode;
+  return S.buildTree(r.tasks, nodeByCode).map((grp) => `<div class="tgrp">
+    <header>${esc(grp.wbs)} · ${esc(grp.name)}<span class="chip">${grp.tasks.length} 道</span></header>
+    ${grp.tasks.map((t) => `<div class="trow ${t.critical ? 'crit' : ''} ${blocked.has(t.code) ? 'blocked' : ''}">
+      <span class="sq">${esc(t.seq)}</span>
+      <span class="nm"><button class="srcbtn" data-task="${esc(t.code)}">${esc(t.name)}</button>
+        <span class="chip">${esc((S.TASK_KINDS[t.kind] || S.TASK_KINDS.other).label)}</span>
+        ${t.hidden ? '<span class="chip warn">隱蔽</span>' : ''}
+        ${gateChip(t)} ${confChip(t)}
+        ${blocked.has(t.code) ? `<span class="chip bad">被 ${blocked.get(t.code).map((x) => esc(x.name)).join('、')} 擋住</span>` : ''}</span>
+      <span class="dt">${esc(t.es)} → ${esc(t.ef)} · ${t.duration}d${t.critical ? ' · 要徑' : ` · 浮時 ${t.float}d`}</span>
+    </div>`).join('')}</div>`).join('');
+}
+
+function renderSeqTable(r) {
+  const cols = S.TASK_COLUMNS;
+  return `<div style="overflow:auto"><table class="seq">
+    <thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join('')}</tr></thead>
+    <tbody>${r.tasks.map((t) => {
+      const row = S.toRow(t, r.tasks, state.items);
+      return `<tr class="${t.critical ? 'crit' : ''}">${cols.map((c) => {
+        const v = row[c.key];
+        const mono = ['seq', 'wbs'].includes(c.key);
+        if (c.key === 'name') return `<td><button class="srcbtn" data-task="${esc(t.code)}">${esc(v)}</button></td>`;
+        if (c.key === 'confidenceText') return `<td>${confChip(t)}</td>`;
+        if (c.key === 'gateText') return `<td>${t.isGate ? gateChip(t) : '否'}</td>`;
+        return `<td class="${mono ? 'mono' : ''}">${esc(v)}</td>`;
+      }).join('')}</tr>`;
+    }).join('')}</tbody></table></div>
+    <p class="hint" style="margin-top:8px">這張表是底層資料：能畫出進度、也能反推採購。十六欄對應規格要求，可直接匯出。</p>`;
+}
+
+function renderSeqLanes(r, blocked) {
+  const sw = S.buildSwimlanes(r.tasks);
+  const W = Math.max(760, sw.spanDays * 9);
+  const pos = (o, l) => `left:${(o / sw.spanDays) * 100}%;width:${Math.max((l / sw.spanDays) * 100, 1.2)}%`;
+  const weeks = [];
+  for (let d = 0; d <= sw.spanDays; d += 7) {
+    weeks.push(`<span class="tick" style="left:${(d / sw.spanDays) * 100}%">${esc(S.addDays(sw.start, d).slice(5))}</span>`);
+  }
+  return `<div class="lanewrap">
+    <div class="axis"><div class="lname"></div><div class="track" style="min-width:${W}px">${weeks.join('')}</div></div>
+    ${sw.lanes.map((ln) => `<div class="lane">
+      <div class="lname">${esc(ln.name)}</div>
+      <div class="track" style="min-width:${W}px">
+        ${ln.tasks.map((t, i) => `<div class="bar ${t.critical ? 'crit' : ''} ${t.isGate ? 'gate' : ''} ${t.confidence !== 'drawing' ? 'sug' : ''}"
+          data-task="${esc(t.code)}" style="${pos(t.offset, t.length)};top:${5 + (i % 2) * 22}px"
+          title="${esc(`${t.code} ${t.name}｜${t.es} → ${t.ef}｜${t.critical ? '要徑' : `浮時 ${t.float}d`}${blocked.has(t.code) ? '｜被 Gate 擋住' : ''}`)}">
+          ${t.isGate ? '◆ ' : ''}${esc(t.name)}</div>`).join('')}
+      </div></div>`).join('')}
+  </div>
+  <p class="hint" style="margin-top:8px">橫向是時間、縱向是工種，一眼看得到<b>誰卡誰</b>。
+  紅色為要徑、橘色菱形為 Gate、半透明為「建議工序／需工程確認」。這比普通甘特更適合機電工程 ——
+  機電的問題從來不是某一條工序多長，而是介面工種互相等。</p>`;
+}
+
+/**
+ * 材料需求日整片紅字時，真正要回答的不是「哪幾項遲了」，而是「那我最早能哪天開工」。
+ * 用真排程迭代求解，不做線性外插（週末與假日會讓外插偏早，偏早比沒有答案更危險）。
+ */
+function feasibilityBanner(chains) {
+  const late = chains.filter((c) => c.status === 'overdue');
+  if (!late.length) return '';
+  const f = S.earliestFeasibleStart(state.tasks, state.items, { ...seqOpts(), today: new Date() });
+  if (!f) return '';
+  const d = f.driver;
+  return `<div class="feas ${f.feasible ? '' : 'bad'}">
+    <b>${late.length} 項材料的建議 PR 日已經過去了。</b>
+    以 ${esc(f.projectStart)} 開工，這張表不是提醒，是「已經來不及」。<br>
+    ${f.feasible
+      ? `要讓每一項都來得及送審發包，最早可行開工日是 <b>${esc(f.earliestStart)}</b>（往後 ${f.shiftDays} 天）${d ? `，卡在<b>${esc(d.itemName)}</b>（Lead ${d.leadTimeDays} 天）` : ''}。
+         <button class="btn sm" id="btnFeasApply" data-start="${esc(f.earliestStart)}">套用為開工日</button>
+         <div class="hint" style="margin-top:5px">此日期是用真正的排程迭代 ${f.iterations} 次求得，已把週末與行事曆假日算進去，不是把工作日當日曆日外插。</div>`
+      : `即使往後推 ${f.shiftDays} 天仍收斂不了，代表長前置期項目的 Lead 與工期本身相矛盾 —— 要改的是採購策略（分批、預先議價、改替代品），不是開工日。`}
+    <div class="hint" style="margin-top:5px">這只是把「不可能」講清楚。實務上壓縮 Lead、先發包長料、或改工序都能省回來，但那是決策，不是這張表能替你做的。</div>
+  </div>`;
+}
+
+function renderSeqMaterials(r) {
+  const chains = S.materialChains(r.tasks, state.items, { ...seqOpts(), today: new Date() });
+  if (!chains.length) return '<div class="hint">工序尚未連結任何 BOM 工項。在關聯表的「使用BOM」欄可看到連結狀況。</div>';
+  const badge = { overdue: '<span class="chip bad">已逾期</span>', urgent: '<span class="chip warn">急迫</span>', ok: '' };
+  const orphans = chains.orphans || [];
+  return `${feasibilityBanner(chains)}
+    ${orphans.length ? `<p class="chip warn" style="display:block;padding:7px 10px;margin-bottom:10px">
+      ${orphans.length} 項材料只被送審工序引用、沒有任何安裝工序會用到它，因此<b>推不出需求日</b>：
+      ${orphans.map((o) => esc(o.itemName)).join('、')}。請補上使用它的施工工序，而不是隨便給一個日期。</p>` : ''}
+    <table class="mat">
+    <thead><tr><th>工項</th><th>使用工序</th><th>工序開始</th><th>需求進場日</th><th>最晚核准日</th><th>最晚送審日</th><th>建議發包日</th><th>建議PR日</th><th>Lead</th><th>狀態</th></tr></thead>
+    <tbody>${chains.map((c) => `<tr class="${c.status}">
+      <td>${esc(c.itemName)}<div class="hint">${esc(c.itemCode)}</div></td>
+      <td>${esc(c.taskName)}<div class="hint">${esc(c.taskCode)}${c.usedBy.length > 1 ? ` 等 ${c.usedBy.length} 道` : ''}</div></td>
+      <td class="n">${esc(c.taskStart)}</td><td class="n">${esc(c.needOnSite)}</td>
+      <td class="n">${esc(c.approveBy)}</td><td class="n">${esc(c.submitBy)}</td>
+      <td class="n">${esc(c.poBy)}</td><td class="n"><b>${esc(c.prBy)}</b></td>
+      <td class="n">${c.leadTimeDays}d</td><td>${badge[c.status]}</td></tr>`).join('')}</tbody></table>
+    <p class="hint" style="margin-top:10px">反推鏈（日曆日）：
+    <code>工序開始 −${seqOpts().siteBufferDays}d = 需求進場 −Lead = 最晚核准 −送審 = 最晚送審／建議發包 −${seqOpts().prToPoDays}d = 建議PR</code><br>
+    <b>採購 Lead 從「送審核准後」起算</b>，不是從下單起算 —— 台灣營建實務是先發包、廠商送審、核准後才開始製造。
+    把 Lead 從下單起算會讓所有日期早算掉一整個送審週期。</p>
+    <p class="hint">同一材料被多道工序使用時，由<b>最早</b>需要它的那道決定 PR 日；晚的那道沒有話語權。</p>`;
+}
+
+function openTaskDialog(code) {
+  const t = taskById(code);
+  if (!t) return;
+  const r = state.sched;
+  const row = S.toRow(t, r.tasks, state.items);
+  const blocked = S.gateBlocks(r.tasks).get(code) || [];
+  const chains = (t.bomCodes || []).map((c) => {
+    const item = state.items.find((i) => i.code === c);
+    return item ? { item, chain: S.procurementChain(t, item, { ...seqOpts(), today: new Date() }) } : null;
+  }).filter(Boolean);
+  dialog(`${t.code} ${t.name}`, `
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:9px">
+      <span class="chip">${esc((S.TASK_KINDS[t.kind] || S.TASK_KINDS.other).label)}</span>
+      ${t.hidden ? '<span class="chip warn">隱蔽工程</span>' : ''}
+      ${t.isGate ? `<span class="chip ${S.GATE_STATUS[t.gateStatus || 'unchecked'].level === 'ok' ? 'ok' : ''}">◆ Gate ${esc(S.GATE_STATUS[t.gateStatus || 'unchecked'].label)}</span>` : ''}
+      ${confChip(t)}
+      ${t.critical ? '<span class="chip bad">要徑</span>' : `<span class="chip">浮時 ${t.float} 天</span>`}
+    </div>
+    ${t.evidence ? `<div class="ans">圖說證據：${esc(t.evidence.text)}<div class="hint">${esc(t.evidence.doc)} 第 ${t.evidence.line} 行（命中「${esc(t.evidence.matched)}」）</div></div>`
+      : '<p class="chip warn" style="display:block;padding:7px 10px">在已載入文件中找不到這道工序的依據。它來自工程慣例，<b>不是圖說要求</b> —— 發包前請工程確認。</p>'}
+    <table class="fac" style="margin-top:10px"><tbody>
+      ${S.TASK_COLUMNS.filter((c) => !['name', 'confidenceText', 'gateText'].includes(c.key))
+        .map((c) => `<tr><td>${esc(c.label)}</td><td style="text-align:left">${esc(row[c.key] || '—')}</td></tr>`).join('')}
+      <tr><td>排程</td><td style="text-align:left">最早 ${esc(t.es)} → ${esc(t.ef)}　最晚 ${esc(t.ls)} → ${esc(t.lf)}</td></tr>
+    </tbody></table>
+    ${blocked.length ? `<p class="chip bad" style="display:block;padding:7px 10px;margin-top:10px">本工序被未通過的 Gate 擋住：${blocked.map((x) => esc(`${x.code} ${x.name}`)).join('、')}</p>` : ''}
+    ${chains.length ? `<h4 style="margin:14px 0 6px">材料採購反推</h4>
+      <table class="mat"><thead><tr><th>材料</th><th>需求進場</th><th>最晚核准</th><th>最晚送審</th><th>建議發包</th><th>建議PR</th></tr></thead>
+      <tbody>${chains.map(({ item, chain }) => `<tr class="${chain.status}">
+        <td>${esc(item.name)}<div class="hint">${esc(item.code)}${Q.isNum(item.qty.manual) || Q.isNum(item.qty.drawing) || Q.isNum(item.qty.boq) ? ` · ${Q.fmt(Q.suggestPurchase(priced(item), state.settings).suggestQty, 2)} ${esc(item.unit)}` : ''}</div></td>
+        <td class="n">${esc(chain.needOnSite)}</td><td class="n">${esc(chain.approveBy)}</td>
+        <td class="n">${esc(chain.submitBy)}</td><td class="n">${esc(chain.poBy)}</td>
+        <td class="n"><b>${esc(chain.prBy)}</b></td></tr>`).join('')}</tbody></table>` : ''}`,
+    t.isGate
+      ? [{ label: '關閉' }, { label: `切換 Gate 狀態`, primary: true, fn: () => cycleGate(code) }]
+      : [{ label: '關閉' }]);
+}
+
+function exportSeqCsv() {
+  const r = state.sched || runSchedule();
+  if (!r) return dialog('沒有工序', '<p>請先載入工序範本。</p>');
+  const head = [...S.TASK_COLUMNS.map((c) => c.label), '最早開始', '最早完成', '最晚開始', '最晚完成', '浮時', '要徑', '工期'];
+  const rows = r.tasks.map((t) => {
+    const row = S.toRow(t, r.tasks, state.items);
+    return [...S.TASK_COLUMNS.map((c) => row[c.key]), t.es, t.ef, t.ls, t.lf, t.float, t.critical ? '是' : '', t.duration];
+  });
+  download(`施工工序-${new Date().toISOString().slice(0, 10)}.csv`, [head, ...rows].map((x) => x.map(csvCell).join(',')).join('\n'));
+
+  const chains = S.materialChains(r.tasks, state.items, { ...seqOpts(), today: new Date() });
+  if (chains.length) {
+    const h2 = ['工項代碼', '工項名稱', '單位', '使用工序', '工序開始', '需求進場日', '最晚核准日', '最晚送審日', '建議發包日', '建議PR日', '採購Lead(天)', '送審(天)', '狀態'];
+    const r2 = chains.map((c) => [c.itemCode, c.itemName, c.unit, `${c.taskCode} ${c.taskName}`, c.taskStart,
+      c.needOnSite, c.approveBy, c.submitBy, c.poBy, c.prBy, c.leadTimeDays, c.submittalDays,
+      { overdue: '已逾期', urgent: '急迫', ok: '' }[c.status]]);
+    download(`材料需求日-${new Date().toISOString().slice(0, 10)}.csv`, [h2, ...r2].map((x) => x.map(csvCell).join(',')).join('\n'));
+  }
+}
 
 /* ══════════ 風險模擬 ══════════ */
 
@@ -1685,6 +1974,7 @@ function exportProject() {
     rfiLog: state.rfiLog,
     baselines: state.baselines,
     prs: state.prs,
+    tasks: state.tasks,
     selected: [...state.selected],
   };
   download(`takeoff-project-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
@@ -1704,6 +1994,7 @@ async function importProject(file) {
     state.rfiLog = d.rfiLog || state.rfiLog;
     state.baselines = d.baselines || state.baselines;
     state.prs = d.prs || state.prs;
+    state.tasks = d.tasks || state.tasks;
     renderAll();
     dialog('匯入完成', `<p>已載入 ${d.items.length} 筆工項狀態。</p>`);
   } catch (e) { dialog('匯入失敗', `<p>${esc(e.message)}</p>`); }
@@ -2237,4 +2528,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, runAnalysis, renderAll };
+window.__takeoff = { state, Q, DXF, A, B, R, S, runAnalysis, renderAll, runSchedule };

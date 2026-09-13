@@ -135,6 +135,8 @@ td.blchg{color:var(--warn);font-size:11px;font-family:var(--mono)}
 .viewwrap.on{display:flex}
 .tablewrap{display:none;flex-direction:column;min-height:0;flex:1}
 .tablewrap.on{display:flex}
+.seqwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.seqwrap.on{display:flex}
 .scanwrap{display:none;flex-direction:column;min-height:0;flex:1}
 .scanwrap.on{display:flex}
 .scanhead{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
@@ -165,6 +167,40 @@ td.blchg{color:var(--warn);font-size:11px;font-family:var(--mono)}
 .rfi{border:1px solid var(--line);border-left-width:3px;border-radius:9px;padding:8px 11px;margin-bottom:7px}
 .rfi.high{border-left-color:var(--bad)} .rfi.med{border-left-color:var(--warn)} .rfi.low{border-left-color:var(--ink3)}
 .rfi h4{margin:0 0 3px;font-size:13px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+/* 工序 */
+.tgrp{margin-bottom:10px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.tgrp>header{padding:6px 10px;background:var(--line2);font-size:12px;font-weight:700;display:flex;gap:8px;align-items:center}
+.trow{display:flex;gap:8px;align-items:center;padding:5px 10px;border-top:1px solid var(--line2);font-size:12.5px;flex-wrap:wrap}
+.trow:hover{background:var(--line2)}
+.trow .sq{font-family:var(--mono);color:var(--ink3);width:34px;flex:none}
+.trow .nm{flex:1;min-width:150px}
+.trow .dt{font-family:var(--mono);font-size:11.5px;color:var(--ink2);white-space:nowrap}
+.trow.crit{box-shadow:inset 3px 0 0 var(--bad)}
+.trow.blocked{background:var(--bad-bg)}
+table.seq{width:100%;border-collapse:separate;border-spacing:0;font-size:11.5px}
+table.seq th,table.seq td{padding:4px 6px;border-bottom:1px solid var(--line2);vertical-align:top;text-align:left}
+table.seq thead th{position:sticky;top:0;background:var(--panel);z-index:2;white-space:nowrap;font-size:11px;color:var(--ink2);border-bottom:1px solid var(--line)}
+table.seq td.mono{font-family:var(--mono)}
+.lanewrap{overflow-x:auto;border:1px solid var(--line);border-radius:9px}
+.lane{display:flex;align-items:stretch;border-top:1px solid var(--line2);min-height:34px}
+.lane:first-child{border-top:0}
+.lane .lname{width:88px;flex:none;padding:6px 8px;font-size:11.5px;font-weight:700;background:var(--line2);display:flex;align-items:center}
+.lane .track{position:relative;flex:1;min-width:760px;padding:5px 0}
+.bar{position:absolute;height:20px;border-radius:4px;background:var(--accent);color:#fff;font-size:10.5px;line-height:20px;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.bar.crit{background:var(--bad)}
+.bar.gate{background:var(--warn);color:#1a1200}
+.bar.sug{opacity:.62}
+.axis{display:flex;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--ink3)}
+.axis .lname{width:88px;flex:none;background:var(--line2)}
+.axis .track{flex:1;min-width:760px;position:relative;height:18px}
+.axis .tick{position:absolute;top:2px;border-left:1px solid var(--line);padding-left:3px}
+.mat{width:100%;border-collapse:collapse;font-size:12px}
+.mat th,.mat td{padding:4px 7px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
+.mat td.n{font-family:var(--mono)}
+.mat tr.overdue{background:var(--bad-bg)} .mat tr.urgent{background:var(--warn-bg)}
+.feas{border:1px solid var(--warn);background:var(--warn-bg);border-radius:8px;padding:10px 12px;margin-bottom:11px;line-height:1.65;font-size:13px}
+.feas.bad{border-color:var(--bad);background:var(--bad-bg)}
+.feas .btn{margin-left:6px;vertical-align:baseline}
 .rfi.done{opacity:.62}
 .rfi .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
 .rfi .meta{font-size:11px;color:var(--ink3);margin-top:4px}
@@ -253,6 +289,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
           <button id="tabScan" aria-pressed="true">解析中心</button>
           <button id="tabList" aria-pressed="false">清單</button>
           <button id="tabView" aria-pressed="false">圖面量測</button>
+          <button id="tabSeq" aria-pressed="false">施工工序</button>
         </div>
       </h2>
 
@@ -333,6 +370,25 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
             <tbody id="boqBody"></tbody>
           </table>
         </div>
+      </div>
+
+      <!-- 施工工序 -->
+      <div class="seqwrap" id="seqWrap">
+        <div class="toolbar">
+          <div class="seg" id="seqView">
+            <button data-sv="tree" aria-pressed="true">工序樹</button>
+            <button data-sv="table" aria-pressed="false">關聯表</button>
+            <button data-sv="lane" aria-pressed="false">泳道圖</button>
+            <button data-sv="mat" aria-pressed="false">材料需求日</button>
+          </div>
+          <label class="hint" style="display:flex;gap:5px;align-items:center">開工日
+            <input type="date" id="seqStart" style="width:150px"></label>
+          <button class="btn sm" id="btnSeqLoad">載入工序範本</button>
+          <button class="btn sm" id="btnSeqCsv">匯出</button>
+          <span class="spacer" style="flex:1"></span>
+          <span class="chip" id="seqStat">尚未載入工序</span>
+        </div>
+        <div class="scroll" id="seqBody" style="padding:12px 14px"></div>
       </div>
 
       <div class="viewwrap" id="viewWrap">
