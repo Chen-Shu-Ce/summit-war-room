@@ -37,6 +37,8 @@ const state = {
   scope: [],           // 分析範圍：大類代碼，空 = 全工程
   analysis: null,      // 最近一次解析結果
   pendingUpKind: 'drawing',
+  rfiLog: {},          // RFI 狀態紀錄，以穩定鍵索引
+  rfiFilter: 'open',
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -90,7 +92,7 @@ function persist() {
         packageId: i.packageId, closed: i.closed,
       })),
       selected: [...state.selected], packages: state.packages, settings: state.settings,
-      projName: state.projName, scope: state.scope,
+      projName: state.projName, scope: state.scope, rfiLog: state.rfiLog,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -117,6 +119,7 @@ function restore() {
     state.projName = d.projName || state.projName;
     state.scope = d.scope || [];
     state.docs = (d.docs || []).map((x) => ({ ...x, restored: true }));
+    state.rfiLog = d.rfiLog || {};
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -202,6 +205,7 @@ function varianceCell(it) {
 function renderTable() {
   const body = $('#boqBody');
   const list = visibleItems();
+  const blockMap = state.analysis ? rfiBlockMap() : new Map();
   const rows = [];
   let lastWbs = null;
   list.forEach((it, idx) => {
@@ -231,8 +235,9 @@ function renderTable() {
       <td class="num">${p.orderQty == null ? '—' : `${Q.fmt(p.orderQty, 2)} ${esc(p.orderUnit)}${p.moqApplied ? ' <span class="chip warn">MOQ</span>' : ''}`}</td>
       <td class="num">${p.cost == null ? '—' : Q.fmt(p.cost, 0)}</td>
     </tr>`);
-    if (!gate && sel) {
-      rows.push(`<tr><td></td><td colspan="11" class="hint" style="color:var(--bad)">此項未達轉採購門檻（可信度 ${c.band}，門檻 ${state.settings.gateBand}）：${esc(p.basis.rule)}</td></tr>`);
+    const rfiWhy = blockMap.get(it.code);
+    if ((!gate || rfiWhy) && sel) {
+      rows.push(`<tr><td></td><td colspan="11" class="hint" style="color:var(--bad)">此項不得轉採購：${esc(rfiWhy || `可信度 ${c.band} 低於門檻 ${state.settings.gateBand}；${p.basis.rule}`)}</td></tr>`);
     }
   });
   body.innerHTML = rows.join('') || '<tr><td colspan="12" class="hint" style="padding:22px;text-align:center">沒有符合條件的工項</td></tr>';
@@ -450,7 +455,16 @@ function wire() {
   });
   $('#rfiList').addEventListener('click', (e) => {
     const g = e.target.closest('[data-rfigo]');
-    if (g) { state.search = g.dataset.rfigo; $('#treeSearch').value = g.dataset.rfigo; state.activeNode = null; renderTree(); renderTable(); setMidTab('list'); }
+    if (g) { state.search = g.dataset.rfigo; $('#treeSearch').value = g.dataset.rfigo; state.activeNode = null; renderTree(); renderTable(); setMidTab('list'); return; }
+    const a = e.target.closest('[data-rfi]');
+    if (!a) return;
+    ({ issue: openIssueRfi, answer: openAnswerRfi, close: openCloseRfi, dismiss: openDismissRfi, reopen: openReopenRfi }[a.dataset.rfi] || (() => {}))(a.dataset.id);
+  });
+  $('#rfiFilter').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rf]'); if (!b) return;
+    $$('#rfiFilter [data-rf]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    state.rfiFilter = b.dataset.rf;
+    if (state.analysis) renderRfi(state.analysis.metrics.rfis);
   });
 
   // 窄螢幕欄位切換
@@ -967,7 +981,14 @@ function openSettings() {
       <div><label class="f">預設損耗率</label><input type="number" id="sWaste" step="0.005" min="0" value="${s.defaultWasteRate}"></div>
       <div><label class="f">轉採購最低可信度</label><select id="sGate">${['A', 'B', 'C', 'D'].map((b) => `<option ${s.gateBand === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
       <div><label class="f">合約型態</label><select id="sContract">${Object.values(Q.CONTRACT_TYPES).map((c) => `<option value="${c.key}" ${s.contractType === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
+      <div><label class="f">RFI 擋採購的嚴重度</label><select id="sRfiGate">
+        <option value="high" ${(s.rfiBlockSeverity || 'high') === 'high' ? 'selected' : ''}>高（預設）</option>
+        <option value="med" ${s.rfiBlockSeverity === 'med' ? 'selected' : ''}>中以上</option>
+        <option value="none" ${s.rfiBlockSeverity === 'none' ? 'selected' : ''}>不擋</option>
+      </select></div>
     </div>
+    <p class="hint" style="margin-top:8px">RFI 若不擋採購，它就只是裝飾品。預設「高」表示：有未結案的高嚴重度 RFI 的工項，
+    不得轉採購包。改成「不擋」等於宣告你願意在問題未釐清前就下單。</p>
     <p class="hint" style="margin-top:8px">合約型態不影響任何數量計算，只改變差異的<b>解讀</b>：實作實算下多出來的量是可請領的增量，
     總價承攬下同一個數字是承包商要吸收的成本。這一欄決定你看到的是機會還是風險。</p>
     <p class="hint" style="margin-top:10px">門檻是風險偏好的具體化：把 3% 調到 8%，等於宣告「圖面與標單差 8% 以內都不必解釋」。
@@ -985,6 +1006,8 @@ function openSettings() {
         s.defaultWasteRate = parseFloat($('#sWaste').value) || 0;
         s.gateBand = $('#sGate').value;
         s.contractType = $('#sContract').value;
+        s.rfiBlockSeverity = $('#sRfiGate').value;
+        if (state.analysis) runAnalysis();
         renderAll();
       },
     }], (body) => {
@@ -1027,14 +1050,17 @@ function openHelp() {
 function toPackage() {
   const list = selectedItems();
   if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要打包的工項。</p>');
+  const blockMap = rfiBlockMap();
   const ok = [], bad = [];
   for (const it of list) {
     const p = Q.suggestPurchase(it, state.settings);
     const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
-    (p.blocked || !Q.bandAtLeast(c.band, state.settings.gateBand)) ? bad.push([it, c, p]) : ok.push(it);
+    const rfiWhy = blockMap.get(it.code);
+    (p.blocked || !Q.bandAtLeast(c.band, state.settings.gateBand) || rfiWhy)
+      ? bad.push([it, c, p, rfiWhy]) : ok.push(it);
   }
   const badHtml = bad.length ? `<p class="chip bad" style="display:block;padding:8px 10px">${bad.length} 項未達門檻，不會納入本包：</p>
-    <ul style="margin:6px 0 10px 18px;padding:0">${bad.map(([it, c, p]) => `<li>${esc(it.name)} — 可信度 ${c.band}；${esc(p.basis.rule)}</li>`).join('')}</ul>` : '';
+    <ul style="margin:6px 0 10px 18px;padding:0">${bad.map(([it, c, p, why]) => `<li>${esc(it.name)} — ${esc(why || (p.blocked ? p.basis.rule : `可信度 ${c.band} 低於門檻 ${state.settings.gateBand}`))}</li>`).join('')}</ul>` : '';
   dialog('轉採購 Package', `
     ${badHtml}
     <p>將 <b>${ok.length}</b> 項納入新採購包。</p>
@@ -1066,7 +1092,7 @@ function toPackage() {
 function autoPackage() {
   const list = selectedItems();
   if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要打包的工項，或在左側勾選整個分類。</p>');
-  const r = Q.suggestPackages(list, state.settings);
+  const r = Q.suggestPackages(list, state.settings, { blocked: rfiBlockMap() });
   if (!r.packages.length) {
     return dialog('無法建議拆包', `<p>已選的 ${list.length} 項全部未達門檻，沒有可打包的工項。</p>
       <ul style="margin:6px 0 0 18px;padding:0">${r.excluded.map((e) => `<li>${esc(e.name)} — ${esc(e.reason)}</li>`).join('')}</ul>`);
@@ -1192,6 +1218,7 @@ function exportProject() {
     settings: state.settings,
     items: state.items,
     packages: state.packages,
+    rfiLog: state.rfiLog,
     selected: [...state.selected],
   };
   download(`takeoff-project-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
@@ -1208,6 +1235,7 @@ async function importProject(file) {
     state.packages = d.packages || [];
     state.selected = new Set(d.selected || []);
     state.settings = { ...state.settings, ...(d.settings || {}) };
+    state.rfiLog = d.rfiLog || state.rfiLog;
     renderAll();
     dialog('匯入完成', `<p>已載入 ${d.items.length} 筆工項狀態。</p>`);
   } catch (e) { dialog('匯入失敗', `<p>${esc(e.message)}</p>`); }
@@ -1444,7 +1472,18 @@ async function openDocInViewer(id) {
 }
 
 function analysisCtx() {
-  return { items: state.items, docs: state.docs, settings: state.settings, scope: state.scope };
+  return { items: state.items, docs: state.docs, settings: state.settings, scope: state.scope, rfiLog: state.rfiLog };
+}
+
+/** 目前被 RFI 閘門擋住的工項 → 原因。轉採購與自動拆包都吃這份。 */
+function rfiBlockMap() {
+  const rfis = (state.analysis && state.analysis.metrics.rfis) || A.resolveRfis(analysisCtx());
+  const m = A.blockingRfiItems(rfis, state.settings);
+  const out = new Map();
+  for (const [code, list] of m) {
+    out.set(code, `有 ${list.length} 筆未結案 RFI（${list.map((r) => r.code || '候選').join('、')}）—— 發出並結案、或填理由「不追」之後才能放行`);
+  }
+  return out;
 }
 
 function runAnalysis() {
@@ -1477,7 +1516,8 @@ function renderStats(m) {
     statCard('confirmed', '數量已確認', m.qtyConfirmed, { unit: '項', level: m.qtyConfirmed === m.itemCount ? 'ok' : '' }),
     statCard('special', '特殊規格', m.specialCount, { unit: '項', level: m.specialCount ? 'warn' : '' }),
     statCard('variance', '差異', m.varianceCount, { unit: '項', level: lvl(m.varianceCount, 1, 8) }),
-    statCard('rfi', 'RFI 候選', m.rfiCount, { unit: '項', level: lvl(m.rfiCount, 1, 10) }),
+    statCard('rfi', m.rfi && m.rfi.overdue ? `RFI 未結案（逾期 ${m.rfi.overdue}）` : 'RFI 未結案', m.rfiCount,
+      { unit: '項', level: m.rfi && m.rfi.overdue ? 'bad' : lvl(m.rfiCount, 1, 10) }),
     statCard('longlead', '長交期', m.longLeadCount, { unit: '項', level: m.longLeadCount ? 'warn' : '' }),
   ].join('');
 }
@@ -1492,21 +1532,62 @@ function renderStages(m) {
 }
 
 function renderRfi(rfis) {
-  $('#rfiCount').textContent = String(rfis.length);
+  const sum = A.rfiSummary(rfis);
+  $('#rfiCount').textContent = `未結案 ${sum.open} / 共 ${sum.total}${sum.overdue ? ` · 逾期 ${sum.overdue}` : ''}`;
+  const today = new Date().toISOString().slice(0, 10);
+  const f = state.rfiFilter;
+  const shown = rfis.filter((r) => {
+    if (f === 'all') return true;
+    if (f === 'open') return A.isRfiOpen(r);
+    if (f === 'closed') return !A.isRfiOpen(r);
+    if (f === 'overdue') return r.status === 'issued' && r.dueDate && r.dueDate < today;
+    return true;
+  });
+
   const host = $('#rfiList');
   if (!rfis.length) {
     host.innerHTML = '<div class="hint">沒有偵測到不一致。注意：這只代表「已載入的文件之間」沒有矛盾，不代表圖說本身正確。</div>';
     return;
   }
-  host.innerHTML = rfis.map((r) => `<div class="rfi ${r.severity}">
-    <h4><span class="chip">${esc(r.code)}</span>
-      <span class="chip ${r.severity === 'high' ? 'bad' : r.severity === 'med' ? 'warn' : ''}">${esc(A.RFI_TYPES[r.type].label)}</span>
-      ${esc(r.title)}
-      ${r.itemCode ? `<button class="btn sm" data-rfigo="${esc(r.itemCode)}">看工項</button>` : ''}</h4>
-    <p>${esc(r.question)}</p>
-    <table><tbody>${(r.evidence || []).map((e) => `<tr><td>${esc(e.label)}</td><td>${esc(e.value)}</td><td>${esc(e.from || '')}</td></tr>`).join('')}</tbody></table>
-    <p class="hint">建議發問對象：${esc(r.askTo)}</p>
-  </div>`).join('');
+  if (!shown.length) { host.innerHTML = `<div class="hint">目前篩選（${esc(f)}）下沒有項目。</div>`; return; }
+
+  host.innerHTML = shown.map((r) => {
+    const st = A.RFI_STATUS[r.status] || A.RFI_STATUS.candidate;
+    const overdue = r.status === 'issued' && r.dueDate && r.dueDate < today;
+    const acts = [];
+    if (r.status === 'candidate') { acts.push(['issue', '發出 RFI', 'primary']); acts.push(['dismiss', '不追', '']); }
+    else if (r.status === 'issued') { acts.push(['answer', '登記回覆', 'primary']); acts.push(['close', '直接結案', '']); acts.push(['dismiss', '不追', '']); }
+    else if (r.status === 'answered') { acts.push(['close', '結案', 'primary']); acts.push(['answer', '修改回覆', '']); }
+    else { acts.push(['reopen', '重開', '']); }
+
+    const meta = [
+      r.code ? `文號 ${r.code}` : null,
+      r.docNo ? `公文 ${r.docNo}` : null,
+      r.issuedAt ? `發出 ${r.issuedAt.slice(0, 10)}` : null,
+      r.dueDate ? `期限 ${r.dueDate}` : null,
+      r.assignee ? `對象 ${r.assignee}` : null,
+      r.closedAt ? `結案 ${r.closedAt}（${(A.RFI_CLOSE_ACTIONS[r.closeAction] || {}).label || ''}）` : null,
+      r.dismissReason ? `不追：${r.dismissReason}` : null,
+    ].filter(Boolean).join(' · ');
+
+    return `<div class="rfi ${r.severity}${A.isRfiOpen(r) ? '' : ' done'}">
+      <h4>
+        <span class="chip ${st.level === 'ok' ? 'ok' : st.level === 'warn' ? 'warn' : st.level === 'acc' ? 'acc' : ''}">${esc(st.label)}</span>
+        ${r.code ? `<span class="chip">${esc(r.code)}</span>` : ''}
+        <span class="chip ${r.severity === 'high' ? 'bad' : r.severity === 'med' ? 'warn' : ''}">${esc((A.RFI_TYPES[r.type] || {}).label || r.type)}</span>
+        ${overdue ? '<span class="chip bad">逾期</span>' : ''}
+        ${r.vanished ? '<span class="chip warn" title="已發出後，觸發條件在最新解析中已不存在">條件已消失</span>' : ''}
+        ${esc(r.title)}
+        ${r.itemCode ? `<button class="btn sm" data-rfigo="${esc(r.itemCode)}">看工項</button>` : ''}</h4>
+      <p>${esc(r.question)}</p>
+      ${(r.evidence || []).length ? `<table><tbody>${r.evidence.map((e) => `<tr><td>${esc(e.label)}</td><td>${esc(e.value)}</td><td>${esc(e.from || '')}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${r.answer ? `<div class="ans">回覆：${esc(r.answer)}${r.answeredBy ? `<div class="hint">${esc(r.answeredBy)} · ${esc(r.answeredAt || '')}</div>` : ''}</div>` : ''}
+      ${meta ? `<div class="meta">${esc(meta)}</div>` : `<div class="meta">建議發問對象：${esc(r.askTo || '')}</div>`}
+      ${r.vanished ? '<div class="meta" style="color:var(--warn)">這筆已發文出去，但最新解析已找不到觸發條件（可能對方已改圖）。請確認後結案，不要放著。</div>' : ''}
+      <div class="acts">${acts.map(([k, label, cls]) => `<button class="btn sm ${cls}" data-rfi="${k}" data-id="${esc(r.id)}">${label}</button>`).join('')}</div>
+      ${(r.history || []).length ? `<details class="hist"><summary>歷程 ${r.history.length} 筆</summary><ul>${r.history.map((h) => `<li>${esc(h.at.slice(0, 16).replace('T', ' '))} ${esc(h.from)} → ${esc(h.to)}${h.by ? ` · ${esc(h.by)}` : ''}${h.note ? ` · ${esc(h.note)}` : ''}</li>`).join('')}</ul></details>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function onStatClick(key) {
@@ -1545,17 +1626,147 @@ function onStatClick(key) {
   else setMidTab('list');
 }
 
+/* ── RFI 狀態流操作 ── */
+
+function currentRfi(id) {
+  const list = (state.analysis && state.analysis.metrics.rfis) || A.resolveRfis(analysisCtx());
+  return list.find((r) => r.id === id);
+}
+
+function applyRfiResult(res, okMsg) {
+  if (res.error) { dialog('無法執行', `<p>${esc(res.error)}</p>`); return false; }
+  state.rfiLog = res.log;
+  if (res.itemPatch) {
+    const it = state.itemByCode.get(res.itemPatch.code);
+    if (it) {
+      for (const [k, v] of Object.entries(res.itemPatch.set)) {
+        if (k === 'qty.manual') it.qty.manual = v; else it[k] = v;
+      }
+    }
+  }
+  runAnalysis();
+  renderAll();
+  if (okMsg) setTimeout(() => dialog('已更新', `<p>${okMsg}</p>`), 50);
+  return true;
+}
+
+function openIssueRfi(id) {
+  const r = currentRfi(id); if (!r) return;
+  const nextCode = A.nextRfiCode(state.rfiLog);
+  dialog(`發出 RFI — ${nextCode}`, `
+    <p class="hint">${esc(r.title)}</p>
+    <div class="fgrid">
+      <div><label class="f">公文文號</label><input type="text" id="rDoc" placeholder="例：函字第 001 號"></div>
+      <div><label class="f">發問對象</label><input type="text" id="rTo" value="${esc(r.askTo || '')}"></div>
+      <div><label class="f">回覆期限（天）</label><input type="number" id="rDays" value="7" min="1"></div>
+      <div><label class="f">發出人</label><input type="text" id="rBy" placeholder="姓名／職稱"></div>
+    </div>
+    <p class="hint" style="margin-top:10px">按下發出後，本筆會取得正式文號 <b>${esc(nextCode)}</b>，
+    問題內容即<b>凍結</b> —— 之後就算重新解析、條件改變，你發文問的那句話都不會被改寫。</p>`,
+    [{ label: '取消' }, {
+      label: '發出', primary: true, fn: () => {
+        applyRfiResult(A.issueRfi(state.rfiLog, r, {
+          docNo: $('#rDoc').value, assignee: $('#rTo').value,
+          dueDays: parseInt($('#rDays').value, 10) || 7, by: $('#rBy').value,
+        }), `已發出 ${nextCode}。逾期未回覆會在清單中標紅。`);
+      },
+    }]);
+}
+
+function openAnswerRfi(id) {
+  const r = currentRfi(id); if (!r) return;
+  dialog(`登記回覆 — ${esc(r.code || '')}`, `
+    <p class="hint">${esc(r.title)}</p>
+    <div><label class="f">回覆內容</label><textarea id="aText" rows="4" placeholder="照抄對方回覆的原文，不要自行改寫">${esc(r.answer || '')}</textarea></div>
+    <div class="fgrid" style="margin-top:10px">
+      <div><label class="f">回覆人</label><input type="text" id="aBy" value="${esc(r.answeredBy || '')}" placeholder="例：設計單位 王工程師"></div>
+      <div><label class="f">回覆日期</label><input type="date" id="aAt" value="${esc(r.answeredAt || new Date().toISOString().slice(0, 10))}"></div>
+    </div>
+    <p class="hint" style="margin-top:10px">原文照抄的理由：結案時如果採用回覆數量，這段文字會被寫進工項的「確認理由」，
+    成為日後估驗與爭議時的依據。改寫過的回覆沒有證據力。</p>`,
+    [{ label: '取消' }, {
+      label: '登記', primary: true, fn: () => {
+        applyRfiResult(A.answerRfi(state.rfiLog, r, {
+          answer: $('#aText').value, answeredBy: $('#aBy').value, answeredAt: $('#aAt').value,
+        }));
+      },
+    }]);
+}
+
+function openCloseRfi(id) {
+  const r = currentRfi(id); if (!r) return;
+  const it = r.itemCode ? state.itemByCode.get(r.itemCode) : null;
+  dialog(`結案 — ${esc(r.code || '')}`, `
+    <p class="hint">${esc(r.title)}</p>
+    ${r.answer ? `<div class="ans">回覆：${esc(r.answer)}${r.answeredBy ? `<div class="hint">${esc(r.answeredBy)} · ${esc(r.answeredAt || '')}</div>` : ''}</div>` : '<p class="chip warn" style="display:block;padding:6px 9px">尚未登記回覆就結案，請在備註寫明依據。</p>'}
+    <div style="margin-top:11px"><label class="f">結案動作</label>
+      <select id="cAct">${Object.values(A.RFI_CLOSE_ACTIONS).map((a) => `<option value="${a.key}">${a.label}</option>`).join('')}</select></div>
+    <div id="cValWrap" style="margin-top:9px"></div>
+    <div style="margin-top:9px"><label class="f">備註</label><input type="text" id="cNote" placeholder="選填"></div>
+    <p class="hint" style="margin-top:10px">採用回覆數量會寫進工項的<b>人工確認</b>，簽核人記為回覆人、理由記為本 RFI 文號與回覆原文 ——
+    這就是 RFI 閉環：問題的答案變成工項上可稽核的事實，而不是躺在信箱裡。</p>`,
+    [{ label: '取消' }, {
+      label: '結案', primary: true, fn: () => {
+        const act = $('#cAct').value;
+        const valEl = $('#cVal');
+        applyRfiResult(A.closeRfi(state.rfiLog, r, {
+          action: act, value: valEl ? valEl.value : null, note: $('#cNote').value,
+        }), '已結案。若該工項原本被 RFI 擋住轉採購，現在會重新檢查。');
+      },
+    }], (body) => {
+      const sel = body.querySelector('#cAct');
+      const wrap = body.querySelector('#cValWrap');
+      const draw = () => {
+        const a = A.RFI_CLOSE_ACTIONS[sel.value];
+        if (!a.needs) { wrap.innerHTML = ''; return; }
+        wrap.innerHTML = a.needs === 'number'
+          ? `<label class="f">回覆數量（${esc(it ? it.unit : '')}）</label><input type="number" id="cVal" step="0.01" value="${it && Q.isNum(it.qty.drawing) ? it.qty.drawing : ''}">`
+          : `<label class="f">回覆規格</label><input type="text" id="cVal" value="${esc(it ? it.spec || '' : '')}">`;
+      };
+      sel.onchange = draw; draw();
+    });
+}
+
+function openDismissRfi(id) {
+  const r = currentRfi(id); if (!r) return;
+  dialog(`不追 — ${esc(r.code || '候選')}`, `
+    <p class="hint">${esc(r.title)}</p>
+    <div><label class="f">理由（必填）</label><textarea id="dReason" rows="3" placeholder="為什麼判定這筆不成立"></textarea></div>
+    <p class="hint" style="margin-top:10px">沒有理由的「不追」等於沒有紀錄。日後有人問「當初為什麼沒追這一條」，
+    這一欄就是答案。</p>`,
+    [{ label: '取消' }, {
+      label: '確定不追', primary: true, fn: () => {
+        applyRfiResult(A.dismissRfi(state.rfiLog, r, { reason: $('#dReason').value }));
+      },
+    }]);
+}
+
+function openReopenRfi(id) {
+  const r = currentRfi(id); if (!r) return;
+  const reason = prompt('重開理由：', '');
+  if (reason == null) return;
+  applyRfiResult(A.reopenRfi(state.rfiLog, r, { reason }));
+}
+
 function exportRfiCsv() {
   const rfis = (state.analysis && state.analysis.metrics.rfis) || [];
   if (!rfis.length) return dialog('沒有 RFI', '<p>目前沒有偵測到不一致。</p>');
-  const head = ['RFI編號', '類型', '嚴重度', 'WBS', '工項代碼', '標題', '問題內容', '發問對象', '證據'];
+  const head = ['RFI編號', '狀態', '類型', '嚴重度', 'WBS', '工項代碼', '標題', '問題內容', '發問對象',
+    '公文文號', '發出日', '回覆期限', '逾期', '回覆內容', '回覆人', '回覆日', '結案日', '結案動作', '不追理由', '條件是否仍存在', '證據'];
+  const today = new Date().toISOString().slice(0, 10);
   const lines = [head, ...rfis.map((r) => [
-    r.code, A.RFI_TYPES[r.type].label, { high: '高', med: '中', low: '低' }[r.severity],
-    r.wbs, r.itemCode || '', r.title, r.question, r.askTo,
+    r.code || '（候選）', (A.RFI_STATUS[r.status] || {}).label || r.status,
+    (A.RFI_TYPES[r.type] || {}).label || r.type, { high: '高', med: '中', low: '低' }[r.severity],
+    r.wbs, r.itemCode || '', r.title, r.question, r.assignee || r.askTo,
+    r.docNo || '', (r.issuedAt || '').slice(0, 10), r.dueDate || '',
+    r.status === 'issued' && r.dueDate && r.dueDate < today ? '是' : '',
+    r.answer || '', r.answeredBy || '', r.answeredAt || '',
+    r.closedAt || '', (A.RFI_CLOSE_ACTIONS[r.closeAction] || {}).label || '', r.dismissReason || '',
+    r.vanished ? '已消失' : '存在',
     (r.evidence || []).map((e) => `${e.label}：${e.value}（${e.from || ''}）`).join(' / '),
   ])].map((r) => r.map(csvCell).join(','));
   download(`RFI-${state.projName}-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF };
+window.__takeoff = { state, Q, DXF, A, runAnalysis, renderAll };

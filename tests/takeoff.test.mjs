@@ -322,13 +322,14 @@ test('RFI：數量無法判斷與規格不完整', () => {
   assert.ok(sp.some((x) => x.itemCode === '810.01'), '空白規格應被抓出');
 });
 
-test('RFI：依嚴重度排序並給連續編號', () => {
+test('RFI：依嚴重度排序，且偵測階段不配文號', () => {
   const all = A.detectRfi(CTX);
-  assert.equal(all[0].code, 'RFI-001');
   const sev = all.map((r) => r.severity);
   const rank = { high: 0, med: 1, low: 2 };
   for (let i = 1; i < sev.length; i++) assert.ok(rank[sev[i - 1]] <= rank[sev[i]], sev.join(','));
   assert.ok(all.every((r) => r.askTo));
+  assert.ok(all.every((r) => r.code === null), '沒發出去的東西不該有正式文號');
+  assert.ok(all.every((r) => r.id && r.id.includes(':')), '每筆都要有穩定鍵');
 });
 
 test('分析範圍過濾：只看 400 大類', () => {
@@ -381,4 +382,175 @@ test('規格完整性：混凝土以強度為規格，不得要求材質尺寸�
 test('規格完整性：工項可自訂必要屬性', () => {
   const it = { measureType: 'length', spec: 'φ50', requiredSpec: ['size'] };
   assert.equal(A.specCompleteness(it).ok, true);
+});
+
+/* ── RFI 狀態流 ── */
+
+const firstRfi = () => A.resolveRfis(CTX).find((r) => r.type === 'drawing-vs-boq');
+
+test('RFI 狀態流：候選無文號，發出時才配號並凍結內容', () => {
+  const r = firstRfi();
+  assert.equal(r.status, 'candidate');
+  assert.equal(r.code, null);
+  const { log } = A.issueRfi({}, r, { docNo: '函字第 001 號', assignee: '設計單位', dueDays: 7 });
+  const rec = log[r.id];
+  assert.equal(rec.code, 'RFI-001');
+  assert.equal(rec.status, 'issued');
+  assert.equal(rec.docNo, '函字第 001 號');
+  assert.ok(rec.snapshot.question.includes('計價數量'), '發文內容要凍結');
+  assert.equal(rec.history.length, 1);
+});
+
+test('RFI 狀態流：文號不會因為重算而換人（陷阱 1）', () => {
+  const r = firstRfi();
+  const { log } = A.issueRfi({}, r, { docNo: 'A' });
+  // 換一組設定讓偵測結果的排序改變
+  const list1 = A.resolveRfis({ ...CTX, rfiLog: log });
+  const list2 = A.resolveRfis({ ...CTX, rfiLog: log, settings: { varianceWarn: 0.001, varianceStop: 0.002 } });
+  const a = list1.find((x) => x.id === r.id);
+  const b = list2.find((x) => x.id === r.id);
+  assert.equal(a.code, 'RFI-001');
+  assert.equal(b.code, 'RFI-001', '重算後同一筆必須還是同一個文號');
+  assert.notEqual(list1.length, list2.length, '這個測試要有意義，兩次偵測結果必須真的不同');
+});
+
+test('RFI 狀態流：新候選的編號會避開已發出的號碼', () => {
+  const r = firstRfi();
+  const { log } = A.issueRfi({}, r, {});
+  assert.equal(A.nextRfiCode(log), 'RFI-002');
+  const { log: log2 } = A.issueRfi(log, A.resolveRfis({ ...CTX, rfiLog: log }).find((x) => x.type === 'spec-incomplete' && x.status === 'candidate'), {});
+  assert.equal(Object.values(log2).map((x) => x.code).sort().join(','), 'RFI-001,RFI-002');
+});
+
+test('RFI 狀態流：已發出但條件消失時保留並標記（陷阱 2）', () => {
+  const r = firstRfi();
+  const { log } = A.issueRfi({}, r, { docNo: 'B' });
+  // 把差異修掉，這筆就偵測不到了
+  const fixed = CTX.items.map((i) => (i.code === r.itemCode ? { ...i, qty: { drawing: 5200, boq: 5200 } } : i));
+  const list = A.resolveRfis({ ...CTX, items: fixed, rfiLog: log });
+  const kept = list.find((x) => x.id === r.id);
+  assert.ok(kept, '已發出的公文不能因為條件消失就被靜默刪掉');
+  assert.equal(kept.vanished, true);
+  assert.equal(kept.detected, false);
+  assert.equal(kept.code, 'RFI-001');
+  assert.ok(kept.question.includes('計價數量'), '仍要看得到當初問了什麼');
+});
+
+test('RFI 狀態流：候選消失就消失，不會留下垃圾', () => {
+  const r = firstRfi();
+  const log = { [r.id]: { id: r.id, status: 'candidate', history: [] } };
+  const fixed = CTX.items.map((i) => (i.code === r.itemCode ? { ...i, qty: { drawing: 5200, boq: 5200 } } : i));
+  const list = A.resolveRfis({ ...CTX, items: fixed, rfiLog: log });
+  assert.ok(!list.some((x) => x.id === r.id));
+});
+
+test('RFI 狀態流：回覆與結案，並回寫工項', () => {
+  const r = firstRfi();
+  let { log } = A.issueRfi({}, r, { docNo: 'C' });
+  const bad = A.closeRfi(log, r, { action: 'adopt-qty' });
+  assert.match(bad.error, /有效數量/);
+
+  ({ log } = A.answerRfi(log, r, { answer: '以圖面量 5,820M 為準，辦理數量變更', answeredBy: '設計單位 王工程師' }));
+  assert.equal(log[r.id].status, 'answered');
+
+  const res = A.closeRfi(log, r, { action: 'adopt-qty', value: 5820 });
+  assert.equal(res.error, undefined);
+  assert.equal(res.log[r.id].status, 'closed');
+  assert.equal(res.itemPatch.code, r.itemCode);
+  assert.equal(res.itemPatch.set['qty.manual'], 5820);
+  assert.equal(res.itemPatch.set.manualBy, '設計單位 王工程師');
+  assert.match(res.itemPatch.set.manualNote, /RFI-001/);
+  assert.match(res.itemPatch.set.manualNote, /數量變更/);
+});
+
+test('RFI 狀態流：狀態轉換不合法時擋下並說明', () => {
+  const r = firstRfi();
+  assert.match(A.answerRfi({}, r, { answer: 'x' }).error, /已發出/);
+  assert.match(A.closeRfi({}, r, { action: 'no-change' }).error, /已發出|已回覆/);
+  const { log } = A.issueRfi({}, r, {});
+  assert.match(A.issueRfi(log, r, {}).error, /重複發出/);
+  assert.match(A.answerRfi(log, r, { answer: '  ' }).error, /不得空白/);
+  assert.match(A.dismissRfi({}, r, {}).error, /理由/);
+});
+
+test('RFI 狀態流：不追要留理由，重開要留紀錄', () => {
+  const r = firstRfi();
+  const { log } = A.dismissRfi({}, r, { reason: '標單已含此量，屬重複計列' });
+  assert.equal(log[r.id].status, 'dismissed');
+  assert.equal(log[r.id].dismissReason, '標單已含此量，屬重複計列');
+  const re = A.reopenRfi(log, r, { reason: '監造不同意' });
+  assert.equal(re.log[r.id].status, 'issued');
+  assert.equal(re.log[r.id].history.length, 2);
+});
+
+test('RFI 狀態流：未結案的高嚴重度 RFI 擋住轉採購（陷阱 3）', () => {
+  const rfis = A.resolveRfis(CTX);
+  const blocked = A.blockingRfiItems(rfis, { rfiBlockSeverity: 'high' });
+  assert.ok(blocked.has('710.01'), '差異 11.9% 的高嚴重度 RFI 必須擋住該工項');
+
+  // 乾淨的工項不該被擋：規格完整、差異 1.5% 在容忍內、無設備標籤
+  const CLEAN = {
+    code: '620.01', wbs: '620', name: '冰水鋼管', spec: 'SGP φ150 Sch40 CNS 6331', unit: 'M',
+    measureType: 'length', qty: { drawing: 340, boq: 335 }, drawingSource: 'measure', coverage: 'full',
+  };
+  const cleanRfis = A.resolveRfis({ ...CTX, items: [CLEAN] });
+  assert.equal(cleanRfis.length, 0, JSON.stringify(cleanRfis.map((x) => x.title)));
+  assert.equal(A.blockingRfiItems(cleanRfis, {}).size, 0);
+
+  // 閘門以「工項」為單位：同一工項上還有其他未結案的高嚴重度 RFI 就不能放行
+  const highs = rfis.filter((x) => x.itemCode === '710.01' && x.severity === 'high');
+  assert.ok(highs.length >= 2, '本測試需要同一工項上有多筆高嚴重度 RFI');
+
+  const closeOne = (log, id) => {
+    const cur = A.resolveRfis({ ...CTX, rfiLog: log }).find((x) => x.id === id);
+    let l = cur.status === 'candidate' ? A.issueRfi(log, cur, {}).log : log;
+    const afterIssue = A.resolveRfis({ ...CTX, rfiLog: l }).find((x) => x.id === id);
+    l = A.answerRfi(l, afterIssue, { answer: '同意照辦' }).log;
+    return A.closeRfi(l, afterIssue, { action: 'no-change' }).log;
+  };
+
+  let log = closeOne({}, highs[0].id);
+  assert.equal(log[highs[0].id].status, 'closed');
+  assert.ok(A.blockingRfiItems(A.resolveRfis({ ...CTX, rfiLog: log }), {}).has('710.01'),
+    '只結案一筆時仍應被擋 —— 閘門看的是工項，不是單筆 RFI');
+
+  for (const h of highs.slice(1)) log = closeOne(log, h.id);
+  const after = A.blockingRfiItems(A.resolveRfis({ ...CTX, rfiLog: log }), {});
+  assert.ok(!after.has('710.01'), '全部結案後才放行');
+
+  assert.equal(A.blockingRfiItems(rfis, { rfiBlockSeverity: 'none' }).size, 0, '可關閉此閘門');
+});
+
+test('RFI 狀態流：逾期追蹤', () => {
+  const r = firstRfi();
+  const { log } = A.issueRfi({}, r, { dueDate: '2020-01-01' });
+  const list = A.resolveRfis({ ...CTX, rfiLog: log });
+  assert.equal(A.overdueRfis(list).length, 1);
+  const sum = A.rfiSummary(list);
+  assert.equal(sum.overdue, 1);
+  assert.equal(sum.byStatus.issued, 1);
+  assert.ok(sum.open >= 1);
+});
+
+test('RFI 狀態流：指標只計未結案', () => {
+  const rfis = A.resolveRfis(CTX);
+  const before = A.metrics({ ...CTX, rfis }).rfiCount;
+  let log = {};
+  for (const r of rfis) {
+    log = A.issueRfi(log, r, {}).log;
+    const cur = A.resolveRfis({ ...CTX, rfiLog: log }).find((x) => x.id === r.id);
+    log = A.answerRfi(log, cur, { answer: 'ok' }).log;
+    log = A.closeRfi(log, cur, { action: 'no-change' }).log;
+  }
+  const after = A.metrics({ ...CTX, rfiLog: log }).rfiCount;
+  assert.ok(before > 0);
+  assert.equal(after, 0, '全部結案後未結案數應為 0');
+});
+
+test('自動拆包：外部封鎖清單（RFI 閘門）也會排除工項', () => {
+  const blocked = new Map([['A', '有 1 筆未結案的高嚴重度 RFI']]);
+  const r = Q.suggestPackages(PKG_ITEMS, {}, { today: new Date('2026-01-01T00:00:00Z'), blocked });
+  assert.ok(!r.packages.some((p) => p.itemCodes.includes('A')));
+  const ex = r.excluded.find((e) => e.code === 'A');
+  assert.match(ex.reason, /未結案/);
 });

@@ -378,8 +378,9 @@ export function leadBucket(days) {
 
 /**
  * 依「前置期分桶 × 供應商」自動建議拆包。
- * 未通過閘門（鎖定或可信度不足）的項目一律排除並回報原因 —— 不讓有問題的量混進 RFQ。
- * opts: { today: Date, bufferDays: number }
+ * 未通過閘門（鎖定、可信度不足、或有未結案 RFI）的項目一律排除並回報原因 —— 不讓有問題的量混進 RFQ。
+ * opts: { today: Date, bufferDays: number, blocked: Map<itemCode, reason> }
+ *   blocked 由呼叫端算好（例如 RFI 閘門），這裡不反向依賴解析模組。
  */
 export function suggestPackages(items, settings = DEFAULT_SETTINGS, opts = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
@@ -388,11 +389,16 @@ export function suggestPackages(items, settings = DEFAULT_SETTINGS, opts = {}) {
   const groups = new Map();
   const excluded = [];
 
+  const blocked = opts.blocked instanceof Map ? opts.blocked : new Map();
   for (const it of items) {
     const p = suggestPurchase(it, s);
     const c = confidence(it, { settings: s, basis: p.basis });
-    if (p.blocked || !bandAtLeast(c.band, s.gateBand)) {
-      excluded.push({ code: it.code, name: it.name, reason: p.blocked ? p.basis.rule : `可信度 ${c.band} 低於門檻 ${s.gateBand}` });
+    const ext = blocked.get(it.code);
+    if (p.blocked || !bandAtLeast(c.band, s.gateBand) || ext) {
+      excluded.push({
+        code: it.code, name: it.name,
+        reason: p.blocked ? p.basis.rule : ext || `可信度 ${c.band} 低於門檻 ${s.gateBand}`,
+      });
       continue;
     }
     const b = leadBucket(it.leadTimeDays);

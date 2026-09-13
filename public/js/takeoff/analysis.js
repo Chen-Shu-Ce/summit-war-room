@@ -269,7 +269,9 @@ export function detectRfi(ctx) {
   }
 
   out.sort((a, b) => (SEV_ORDER[a.severity] - SEV_ORDER[b.severity]) || String(a.wbs).localeCompare(String(b.wbs)));
-  return out.map((r, i) => ({ ...r, code: `RFI-${String(i + 1).padStart(3, '0')}`, askTo: RFI_TYPES[r.type].ask }));
+  // 刻意不在這裡配文號：文號在「發出」時才產生並凍結（見 issueRfi）。
+  // 若在偵測階段就依排序編號，重算一次順序變了，你已經發文出去的 RFI-003 就會變成別人。
+  return out.map((r) => ({ ...r, code: null, askTo: RFI_TYPES[r.type].ask }));
 }
 
 function provLabel(it) {
@@ -309,6 +311,245 @@ export function specConflict(item, doc) {
   return null;
 }
 
+
+/* ────────── RFI 狀態流 ────────── */
+
+/**
+ * 狀態機：
+ *   candidate（候選，規則偵測出來，還沒發文）
+ *     → issued（已發出，此時才配正式文號並凍結問題內容）
+ *       → answered（已登記回覆）
+ *         → closed（結案，回覆已回寫工項或確認無需變更）
+ *     → dismissed（判定不成立，必須留理由）
+ *
+ * 三個刻意的設計，少了任何一個這功能就是裝飾品：
+ *   1. 文號在「發出」時才配並凍結 —— 候選不配號，因為沒人引用過它。
+ *   2. 已發出的 RFI 即使下次偵測不到也保留（設計改圖後條件會消失），
+ *      標記為「條件已不存在」提醒你確認結案，而不是靜默刪掉一筆已發出的公文。
+ *   3. 未結案的高嚴重度 RFI 會擋住該工項轉採購包。
+ */
+export const RFI_STATUS = {
+  candidate: { key: 'candidate', label: '候選', level: 'muted', open: true },
+  issued: { key: 'issued', label: '已發出', level: 'warn', open: true },
+  answered: { key: 'answered', label: '已回覆', level: 'acc', open: true },
+  closed: { key: 'closed', label: '已結案', level: 'ok', open: false },
+  dismissed: { key: 'dismissed', label: '不追', level: 'muted', open: false },
+};
+
+export const RFI_CLOSE_ACTIONS = {
+  'adopt-qty': { key: 'adopt-qty', label: '採用回覆數量', needs: 'number' },
+  'adopt-spec': { key: 'adopt-spec', label: '採用回覆規格', needs: 'text' },
+  'no-change': { key: 'no-change', label: '無需變更', needs: null },
+};
+
+const RFI_BLOCK_RANK = { high: 0, med: 1, low: 2 };
+
+export function isRfiOpen(r) {
+  const st = RFI_STATUS[r && r.status] || RFI_STATUS.candidate;
+  return st.open;
+}
+
+/** 下一個正式文號：取紀錄中最大號 +1，不會因為重排而重複或跳號。 */
+export function nextRfiCode(log = {}) {
+  const max = Object.values(log).reduce((m, r) => {
+    const n = parseInt(String(r.code || '').replace(/\D/g, ''), 10);
+    return Number.isFinite(n) ? Math.max(m, n) : m;
+  }, 0);
+  return `RFI-${String(max + 1).padStart(3, '0')}`;
+}
+
+/**
+ * 把偵測結果與已儲存的狀態紀錄合併成一份完整清單。
+ * ctx 需含 rfiLog（{ [id]: 狀態紀錄 }）。
+ */
+export function resolveRfis(ctx) {
+  const detected = detectRfi(ctx);
+  const log = ctx.rfiLog || {};
+  const out = [];
+  const seen = new Set();
+
+  for (const d of detected) {
+    seen.add(d.id);
+    const st = log[d.id];
+    if (!st) { out.push({ ...d, status: 'candidate', detected: true }); continue; }
+    // 已發出的用發文當下的快照，避免「問過的問題」被之後的重算悄悄改寫
+    const frozen = st.status !== 'candidate' && st.snapshot ? st.snapshot : {};
+    out.push({ ...d, ...st, ...frozen, id: d.id, detected: true });
+  }
+  for (const [id, st] of Object.entries(log)) {
+    if (seen.has(id) || st.status === 'candidate') continue;
+    out.push({
+      severity: 'med', evidence: [], ...(st.snapshot || {}), ...st,
+      id, detected: false, vanished: true,
+      askTo: st.snapshot && RFI_TYPES[st.snapshot.type] ? RFI_TYPES[st.snapshot.type].ask : '',
+    });
+  }
+
+  const statusOrder = { issued: 0, answered: 1, candidate: 2, closed: 3, dismissed: 4 };
+  out.sort((a, b) =>
+    (statusOrder[a.status] - statusOrder[b.status])
+    || (SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+    || String(a.code || 'zz').localeCompare(String(b.code || 'zz'))
+    || String(a.wbs).localeCompare(String(b.wbs)));
+  return out;
+}
+
+function snapshotOf(rfi) {
+  return {
+    type: rfi.type, itemCode: rfi.itemCode, wbs: rfi.wbs, severity: rfi.severity,
+    title: rfi.title, question: rfi.question, evidence: rfi.evidence || [],
+  };
+}
+
+function entry(log, id) {
+  return log[id] || { id, status: 'candidate', history: [] };
+}
+
+function push(rec, from, to, note, by) {
+  rec.history = (rec.history || []).concat([{ at: new Date().toISOString(), from, to, note: note || '', by: by || '' }]);
+  return rec;
+}
+
+/** 發出 RFI：此時才配正式文號並凍結問題內容。 */
+export function issueRfi(log, rfi, payload = {}) {
+  const rec = entry(log, rfi.id);
+  if (rec.status !== 'candidate') return { log, error: `本筆已是「${RFI_STATUS[rec.status].label}」，不能重複發出` };
+  const now = new Date();
+  const days = Number.isFinite(payload.dueDays) ? payload.dueDays : 7;
+  const next = {
+    ...rec,
+    code: rec.code || payload.code || nextRfiCode(log),
+    status: 'issued',
+    issuedAt: now.toISOString(),
+    docNo: (payload.docNo || '').trim(),
+    assignee: (payload.assignee || rfi.askTo || '').trim(),
+    dueDate: payload.dueDate || new Date(now.getTime() + days * 86400000).toISOString().slice(0, 10),
+    snapshot: snapshotOf(rfi),
+  };
+  push(next, 'candidate', 'issued', payload.note, payload.by);
+  return { log: { ...log, [rfi.id]: next } };
+}
+
+/** 登記回覆。 */
+export function answerRfi(log, rfi, payload = {}) {
+  const rec = entry(log, rfi.id);
+  if (rec.status !== 'issued' && rec.status !== 'answered') {
+    return { log, error: '只有已發出的 RFI 才能登記回覆' };
+  }
+  if (!String(payload.answer || '').trim()) return { log, error: '回覆內容不得空白' };
+  const next = {
+    ...rec, status: 'answered',
+    answer: String(payload.answer).trim(),
+    answeredAt: payload.answeredAt || new Date().toISOString().slice(0, 10),
+    answeredBy: (payload.answeredBy || '').trim(),
+  };
+  push(next, rec.status, 'answered', payload.answer, payload.answeredBy);
+  return { log: { ...log, [rfi.id]: next } };
+}
+
+/**
+ * 結案。回傳要套用到工項的變更（由呼叫端寫入），讓這個函式保持純粹。
+ * action：adopt-qty（採用回覆數量）／adopt-spec（採用回覆規格）／no-change。
+ */
+export function closeRfi(log, rfi, payload = {}) {
+  const rec = entry(log, rfi.id);
+  if (rec.status !== 'answered' && rec.status !== 'issued') {
+    return { log, error: '只有已發出或已回覆的 RFI 才能結案' };
+  }
+  const action = payload.action || 'no-change';
+  if (!RFI_CLOSE_ACTIONS[action]) return { log, error: '未知的結案動作' };
+
+  let itemPatch = null;
+  const ref = `${rec.code || 'RFI'}${rec.docNo ? ` / ${rec.docNo}` : ''}`;
+  if (action === 'adopt-qty') {
+    const v = Number(payload.value);
+    if (!Number.isFinite(v) || v < 0) return { log, error: '採用回覆數量時必須填有效數量' };
+    itemPatch = {
+      code: rfi.itemCode,
+      set: {
+        'qty.manual': v,
+        manualBy: (rec.answeredBy || payload.by || '設計單位回覆').trim(),
+        manualNote: `依 ${ref} 回覆：${(rec.answer || '').slice(0, 120)}`,
+      },
+    };
+  } else if (action === 'adopt-spec') {
+    const t = String(payload.value || '').trim();
+    if (!t) return { log, error: '採用回覆規格時必須填規格內容' };
+    itemPatch = { code: rfi.itemCode, set: { spec: t } };
+  }
+
+  const next = {
+    ...rec, status: 'closed',
+    closedAt: new Date().toISOString().slice(0, 10),
+    closeAction: action,
+    closeNote: (payload.note || '').trim(),
+    closeValue: action === 'no-change' ? null : payload.value,
+  };
+  push(next, rec.status, 'closed', `${RFI_CLOSE_ACTIONS[action].label}${payload.value != null ? `：${payload.value}` : ''}`, payload.by);
+  return { log: { ...log, [rfi.id]: next }, itemPatch };
+}
+
+/** 判定不成立。必須留理由 —— 沒有理由的「不追」等於沒有紀錄。 */
+export function dismissRfi(log, rfi, payload = {}) {
+  const reason = String(payload.reason || '').trim();
+  if (!reason) return { log, error: '不追必須填理由' };
+  const rec = entry(log, rfi.id);
+  const next = {
+    ...rec, code: rec.code || null, status: 'dismissed',
+    dismissedAt: new Date().toISOString().slice(0, 10),
+    dismissReason: reason,
+    snapshot: rec.snapshot || snapshotOf(rfi),
+  };
+  push(next, rec.status, 'dismissed', reason, payload.by);
+  return { log: { ...log, [rfi.id]: next } };
+}
+
+/** 重開：結案後發現不對，要能退回已回覆狀態（留紀錄，不是偷改）。 */
+export function reopenRfi(log, rfi, payload = {}) {
+  const rec = entry(log, rfi.id);
+  if (rec.status !== 'closed' && rec.status !== 'dismissed') return { log, error: '只有已結案或不追的 RFI 需要重開' };
+  const next = { ...rec, status: rec.answer ? 'answered' : 'issued', closedAt: null, closeAction: null, dismissedAt: null };
+  push(next, rec.status, next.status, payload.reason || '重開', payload.by);
+  return { log: { ...log, [rfi.id]: next } };
+}
+
+/** 逾期未回覆的 RFI。RFI 卡住等於採購卡住，這條必須看得見。 */
+export function overdueRfis(rfis, today = new Date()) {
+  const d = today.toISOString().slice(0, 10);
+  return rfis.filter((r) => r.status === 'issued' && r.dueDate && r.dueDate < d);
+}
+
+/**
+ * 會擋住轉採購的工項代碼。
+ * settings.rfiBlockSeverity：'high'（預設）｜'med'｜'none'。
+ */
+export function blockingRfiItems(rfis, settings = {}) {
+  const level = settings.rfiBlockSeverity || 'high';
+  if (level === 'none') return new Map();
+  const max = RFI_BLOCK_RANK[level] ?? 0;
+  const m = new Map();
+  for (const r of rfis) {
+    if (!r.itemCode || !isRfiOpen(r)) continue;
+    if ((RFI_BLOCK_RANK[r.severity] ?? 2) > max) continue;
+    if (!m.has(r.itemCode)) m.set(r.itemCode, []);
+    m.get(r.itemCode).push(r);
+  }
+  return m;
+}
+
+/** RFI 統計，供解析中心的指標卡使用。 */
+export function rfiSummary(rfis, today = new Date()) {
+  const by = { candidate: 0, issued: 0, answered: 0, closed: 0, dismissed: 0 };
+  for (const r of rfis) by[r.status] = (by[r.status] || 0) + 1;
+  return {
+    total: rfis.length,
+    open: rfis.filter(isRfiOpen).length,
+    overdue: overdueRfis(rfis, today).length,
+    vanished: rfis.filter((r) => r.vanished).length,
+    byStatus: by,
+  };
+}
+
 /* ────────── 九項指標 ────────── */
 
 export function scopedItems(ctx) {
@@ -335,7 +576,7 @@ export function completeness(ctx, rfis) {
   const n = items.length;
   const ratio = (f) => items.filter(f).length / n;
 
-  const openByItem = new Set((rfis || []).filter((r) => r.status !== 'closed' && r.itemCode).map((r) => r.itemCode));
+  const openByItem = new Set((rfis || []).filter((r) => isRfiOpen(r) && r.itemCode).map((r) => r.itemCode));
   const parts = [
     { key: 'qty', label: '工項有數量來源', weight: 0.30, score: ratio((it) => Q.presentSources(it.qty).length > 0), note: '圖面量或 BOQ 量至少有一' },
     { key: 'link', label: '工項已連結圖面', weight: 0.25, score: ratio((it) => !!it.drawingSource || !!it.provenance), note: '量測或圖層彙總' },
@@ -351,7 +592,7 @@ export function metrics(ctx) {
   const s = { ...Q.DEFAULT_SETTINGS, ...(ctx.settings || {}) };
   const longLead = Q.isNum(s.longLeadDays) ? s.longLeadDays : 90;
   const items = scopedItems(ctx);
-  const rfis = ctx.rfis || detectRfi(ctx);
+  const rfis = ctx.rfis || resolveRfis(ctx);
   const wbsSet = new Set(items.map((it) => it.wbs));
   let confirmed = 0, variance = 0;
   for (const it of items) {
@@ -369,7 +610,8 @@ export function metrics(ctx) {
     qtyConfirmed: confirmed,
     specialCount: items.filter((it) => it.special).length,
     varianceCount: variance,
-    rfiCount: rfis.filter((r) => r.status !== 'closed').length,
+    rfiCount: rfis.filter(isRfiOpen).length,
+    rfi: rfiSummary(rfis),
     longLeadCount: items.filter((it) => (it.leadTimeDays || 0) >= longLead).length,
     rfis,
   };

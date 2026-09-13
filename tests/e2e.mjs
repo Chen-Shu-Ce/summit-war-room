@@ -85,7 +85,8 @@ ok('抓到圖說≠BOQ', types.includes('drawing-vs-boq'), types.join(','));
 ok('抓到數量無法判斷', types.includes('qty-undeterminable'), types.join(','));
 ok('抓到規格不完整', types.includes('spec-incomplete'), types.join(','));
 const firstRfi = await page.locator('.rfi').first().innerText();
-ok('RFI 卡片含編號與證據', /RFI-001/.test(firstRfi) && firstRfi.includes('建議發問對象'), firstRfi.replace(/\s+/g, ' ').slice(0, 110));
+ok('RFI 卡片顯示候選狀態與發問對象', firstRfi.includes('候選') && firstRfi.includes('建議發問對象'), firstRfi.replace(/\s+/g, ' ').slice(0, 110));
+ok('候選不配正式文號', !/RFI-\d/.test(firstRfi), firstRfi.slice(0, 60));
 const rfiDl = page.waitForEvent('download');
 await page.locator('#btnRfiCsv').click();
 const rfiCsv = await readFile(await (await rfiDl).path(), 'utf8');
@@ -212,6 +213,88 @@ const assigned = await page.evaluate(() => {
 });
 ok('量測值寫入圖面量', Math.abs(assigned.q - 15) / 15 < 0.01, JSON.stringify(assigned));
 ok('標記為實測且記錄校正方式', assigned.src === 'measure' && assigned.cal === 'two-point', JSON.stringify(assigned));
+
+console.log('\n【7a】RFI 狀態流');
+await page.locator('#tabScan').click();
+// 挑一筆有工項的候選，跑完整流程：發出 → 回覆 → 結案並回寫工項
+const pick = await page.evaluate(() => {
+  const { A, state } = window.__takeoff;
+  const r = A.resolveRfis({ items: state.items, docs: state.docs, settings: state.settings, scope: state.scope, rfiLog: state.rfiLog })
+    .find((x) => x.status === 'candidate' && x.itemCode && x.type === 'drawing-vs-boq');
+  return r ? { id: r.id, itemCode: r.itemCode } : null;
+});
+ok('找得到可操作的候選 RFI', !!pick);
+await page.evaluate((id) => document.querySelector(`[data-rfi="issue"][data-id="${id}"]`).click(), pick.id);
+await page.waitForSelector('#dlg[open]');
+ok('發出對話框預告文號 RFI-001', (await page.locator('#dlgBody').innerText()).includes('RFI-001'));
+await page.fill('#rDoc', '函字第 001 號');
+await page.fill('#rBy', '採購工程師');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(250);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+const issued = await page.evaluate((id) => window.__takeoff.state.rfiLog[id], pick.id);
+ok('發出後配得正式文號並凍結內容', issued.code === 'RFI-001' && issued.status === 'issued' && !!issued.snapshot, JSON.stringify(issued.code));
+ok('公文文號有記錄', issued.docNo === '函字第 001 號');
+
+await page.evaluate((id) => document.querySelector(`[data-rfi="answer"][data-id="${id}"]`).click(), pick.id);
+await page.waitForSelector('#dlg[open]');
+await page.fill('#aText', '經查應以圖面量為準，請辦理數量變更。');
+await page.fill('#aBy', '設計單位 王工程師');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(250);
+ok('回覆已登記', (await page.evaluate((id) => window.__takeoff.state.rfiLog[id].status, pick.id)) === 'answered');
+
+await page.evaluate((id) => document.querySelector(`[data-rfi="close"][data-id="${id}"]`).click(), pick.id);
+await page.waitForSelector('#dlg[open]');
+await page.selectOption('#cAct', 'adopt-qty');
+await page.waitForTimeout(80);
+await page.fill('#cVal', '5820');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(300);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+const written = await page.evaluate((c) => {
+  const it = window.__takeoff.state.itemByCode.get(c);
+  return { manual: it.qty.manual, by: it.manualBy, note: it.manualNote };
+}, pick.itemCode);
+ok('結案時把回覆數量回寫工項', written.manual === 5820, JSON.stringify(written));
+ok('簽核人記為回覆人', written.by === '設計單位 王工程師', String(written.by));
+ok('確認理由帶入文號與回覆原文', /RFI-001/.test(written.note) && /數量變更/.test(written.note), String(written.note));
+
+console.log('\n【7b-gate】RFI 擋採購閘門');
+const blockedBefore = await page.evaluate(() => {
+  const { A, state } = window.__takeoff;
+  const rfis = A.resolveRfis({ items: state.items, docs: state.docs, settings: state.settings, scope: state.scope, rfiLog: state.rfiLog });
+  return [...A.blockingRfiItems(rfis, state.settings).keys()];
+});
+ok('有工項因未結案 RFI 被擋', blockedBefore.length > 0, '被擋 ' + blockedBefore.length + ' 項');
+await page.locator('#tabList').click();
+await page.evaluate((codes) => { window.__takeoff.state.selected = new Set(codes.slice(0, 1)); window.__takeoff.renderAll(); }, blockedBefore);
+const gateRow = await page.locator('#boqBody tr').filter({ hasText: '不得轉採購' }).first().innerText();
+ok('清單列出擋下的原因與出路', gateRow.includes('未結案 RFI') && gateRow.includes('不追'), gateRow.replace(/\s+/g, ' ').slice(0, 90));
+await page.evaluate(() => { window.__takeoff.state.selected = new Set(); });
+
+// 把其餘未結案 RFI 以「不追」清掉（必須留理由），讓後續採購包測試回到乾淨狀態
+const dismissed = await page.evaluate(() => {
+  const { A, state } = window.__takeoff;
+  let log = state.rfiLog;
+  const rfis = A.resolveRfis({ items: state.items, docs: state.docs, settings: state.settings, scope: state.scope, rfiLog: log });
+  let n = 0;
+  for (const r of rfis) {
+    if (!A.isRfiOpen(r)) continue;
+    const res = A.dismissRfi(log, r, { reason: 'e2e：本輪不追' });
+    if (!res.error) { log = res.log; n++; }
+  }
+  state.rfiLog = log;
+  window.__takeoff.runAnalysis();
+  return n;
+});
+ok('不追需填理由且可批次處理', dismissed > 0, '處理 ' + dismissed + ' 筆');
+const blockedAfter = await page.evaluate(() => {
+  const { A, state } = window.__takeoff;
+  const rfis = A.resolveRfis({ items: state.items, docs: state.docs, settings: state.settings, scope: state.scope, rfiLog: state.rfiLog });
+  return A.blockingRfiItems(rfis, state.settings).size;
+});
+ok('全部處理後閘門放行', blockedAfter === 0, '仍被擋 ' + blockedAfter);
 
 console.log('\n【7】採購包與匯出');
 await page.locator('#tabList').click();
