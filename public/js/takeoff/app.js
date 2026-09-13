@@ -9,6 +9,7 @@ import * as Q from './quantity.js';
 import * as DXF from './dxf.js';
 import { Viewer, TOOLS } from './viewer.js';
 import * as A from './analysis.js';
+import * as B from './baseline.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -39,6 +40,8 @@ const state = {
   pendingUpKind: 'drawing',
   rfiLog: {},          // RFI 狀態紀錄，以穩定鍵索引
   rfiFilter: 'open',
+  baselines: [],       // 已凍結的基準版
+  prs: [],             // 已產生的請購單
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -49,7 +52,12 @@ async function init() {
   const res = await fetch('./data/wbs-template.json', { cache: 'no-store' });
   if (!res.ok) throw new Error('無法載入 WBS 範本 (' + res.status + ')');
   state.template = await res.json();
-  state.settings = { ...Q.DEFAULT_SETTINGS, ...(state.template.settings || {}) };
+  state.settings = {
+    ...Q.DEFAULT_SETTINGS,
+    prTemplate: B.DEFAULT_PR_TEMPLATE, taxRate: 0.05, dept: '', project: '',
+    erpProfile: 'generic', erpMapping: { header: {}, line: {} }, requireErpCode: true,
+    ...(state.template.settings || {}),
+  };
   buildModel(state.template);
   restore();
   wire();
@@ -93,6 +101,7 @@ function persist() {
       })),
       selected: [...state.selected], packages: state.packages, settings: state.settings,
       projName: state.projName, scope: state.scope, rfiLog: state.rfiLog,
+      baselines: state.baselines, prs: state.prs,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -120,6 +129,8 @@ function restore() {
     state.scope = d.scope || [];
     state.docs = (d.docs || []).map((x) => ({ ...x, restored: true }));
     state.rfiLog = d.rfiLog || {};
+    state.baselines = d.baselines || [];
+    state.prs = d.prs || [];
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -206,6 +217,7 @@ function renderTable() {
   const body = $('#boqBody');
   const list = visibleItems();
   const blockMap = state.analysis ? rfiBlockMap() : new Map();
+  const blDiff = baselineDiffIndex();
   const rows = [];
   let lastWbs = null;
   list.forEach((it, idx) => {
@@ -235,6 +247,11 @@ function renderTable() {
       <td class="num">${p.orderQty == null ? '—' : `${Q.fmt(p.orderQty, 2)} ${esc(p.orderUnit)}${p.moqApplied ? ' <span class="chip warn">MOQ</span>' : ''}`}</td>
       <td class="num">${p.cost == null ? '—' : Q.fmt(p.cost, 0)}</td>
     </tr>`);
+    const bd = blDiff.get(it.code);
+    if (bd) {
+      const brief = bd.fields.slice(0, 3).map((f) => `${f.label} ${f.delta != null ? (f.delta > 0 ? '+' : '') + Q.fmt(f.delta, 2) : `${f.before} → ${f.after}`}`).join('、');
+      rows.push(`<tr><td></td><td colspan="11" class="blchg">較 ${esc(bd.bl.code)} 異動：${esc(brief)}${bd.fields.length > 3 ? ` 等 ${bd.fields.length} 項` : ''}</td></tr>`);
+    }
     const rfiWhy = blockMap.get(it.code);
     if ((!gate || rfiWhy) && sel) {
       rows.push(`<tr><td></td><td colspan="11" class="hint" style="color:var(--bad)">此項不得轉採購：${esc(rfiWhy || `可信度 ${c.band} 低於門檻 ${state.settings.gateBand}；${p.basis.rule}`)}</td></tr>`);
@@ -301,6 +318,7 @@ function renderPkgs() {
     return `<div class="pkg">
       <header><b>${esc(p.code)}</b><span class="chip">${items.length} 項</span><span class="chip acc">NT$ ${Q.fmt(s.cost, 0)}</span>
         <span class="spacer" style="flex:1"></span>
+        <button class="btn sm" data-pkg-freeze="${i}">凍結為基準版</button>
         <button class="btn sm" data-pkg-csv="${i}">RFQ CSV</button>
         <button class="btn sm" data-pkg-del="${i}">刪除</button></header>
       <div class="body">
@@ -318,7 +336,7 @@ function renderPkgs() {
 }
 
 function renderAll() {
-  renderTree(); renderTable(); renderCart(); renderPkgs(); renderDocs(); renderScope();
+  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderDocs(); renderScope();
   const pc = $('#projContract'); if (pc) pc.value = state.settings.contractType || 'remeasure';
   const pn = $('#projName'); if (pn && pn.value !== state.projName) pn.value = state.projName;
   if (state.analysis) {                       // 資料變了就重算，不讓畫面停在舊結論
@@ -402,7 +420,15 @@ function wire() {
     const d = e.target.closest('[data-pkg-del]');
     if (d) { if (confirm('刪除此採購包？')) { state.packages.splice(+d.dataset.pkgDel, 1); renderAll(); } return; }
     const c = e.target.closest('[data-pkg-csv]');
-    if (c) exportPackageCsv(state.packages[+c.dataset.pkgCsv]);
+    if (c) { exportPackageCsv(state.packages[+c.dataset.pkgCsv]); return; }
+    const fz = e.target.closest('[data-pkg-freeze]');
+    if (fz) openFreeze(+fz.dataset.pkgFreeze);
+  });
+  $('#baselines').addEventListener('click', (e) => {
+    const v = e.target.closest('[data-blview]'); if (v) return openBaselineDetail(v.dataset.blview);
+    const d = e.target.closest('[data-bldiff]'); if (d) return openBaselineDiff(d.dataset.bldiff);
+    const p = e.target.closest('[data-blpr]'); if (p) return openCreatePr(p.dataset.blpr);
+    const x = e.target.closest('[data-prexp]'); if (x) return openExportPr(x.dataset.prexp);
   });
 
   // 頂部
@@ -870,6 +896,247 @@ function layerValueFor(item, g, toM) {
   }
 }
 
+
+/* ══════════ 基準版 / 請購單 ══════════ */
+
+function pkgItems(pkg) { return pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean); }
+
+/** 某採購包最新的基準版。 */
+function latestBaseline(pkgCode) {
+  return state.baselines.filter((b) => b.packageCode === pkgCode).sort((a, b) => b.rev - a.rev)[0] || null;
+}
+
+/** 工項 → 所屬最新基準版的差異（給清單上的標記用）。 */
+function baselineDiffIndex() {
+  const idx = new Map();
+  for (const pkg of state.packages) {
+    const bl = latestBaseline(pkg.code);
+    if (!bl) continue;
+    const d = B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings);
+    for (const ch of d.changed) idx.set(ch.code, { bl, fields: ch.fields });
+  }
+  return idx;
+}
+
+function renderBaselines() {
+  const host = $('#baselines');
+  $('#blCount').textContent = String(state.baselines.length);
+  if (!state.baselines.length) {
+    host.innerHTML = '<div class="hint" style="padding:14px 12px;text-align:center">尚無基準版。採購包經工程確認後可凍結為 Baseline，再由它產生請購單。</div>';
+    return;
+  }
+  const byId = new Map(state.baselines.map((b) => [b.id, b]));
+  host.innerHTML = state.baselines.slice().reverse().map((bl) => {
+    const pkg = state.packages.find((p) => p.code === bl.packageCode);
+    const d = pkg ? B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings) : null;
+    const isLatest = latestBaseline(bl.packageCode) === bl;
+    const prs = state.prs.filter((p) => p.baselineId === bl.id);
+    return `<div class="bl">
+      <header>
+        <b>${esc(bl.code)}</b><span class="chip">rev ${bl.rev}</span>
+        ${isLatest ? '' : '<span class="chip">已被取代</span>'}
+        <span class="chip acc">NT$ ${Q.fmt(bl.totals.cost, 0)}</span>
+        <span class="spacer" style="flex:1"></span>
+        ${d && d.dirty ? `<button class="btn sm" data-bldiff="${esc(bl.id)}">變更 ${d.changed.length + d.added.length + d.removed.length}</button>` : '<span class="chip ok">未異動</span>'}
+      </header>
+      <div class="body">
+        <div class="hint">${esc(bl.packageName || bl.packageCode)} · ${bl.totals.count} 項 · 凍結 ${esc(bl.frozenAt.slice(0, 10))} · 確認 ${esc(bl.confirmedBy)}</div>
+        ${bl.note ? `<div class="hint">${esc(bl.note)}</div>` : ''}
+        ${d && d.dirty ? `<div class="dirty">較本基準版有 ${d.changed.length} 項異動、${d.added.length} 項新增、${d.removed.length} 項移除；金額差 ${Q.fmt(d.costDelta, 0)}</div>` : ''}
+        ${prs.length ? `<div class="hint">請購單：${prs.map((p) => esc(p.no)).join('、')}</div>` : ''}
+        <div class="acts">
+          <button class="btn sm" data-blview="${esc(bl.id)}">明細</button>
+          ${isLatest ? `<button class="btn sm primary" data-blpr="${esc(bl.id)}">產生請購單</button>` : ''}
+          ${prs.map((p) => `<button class="btn sm" data-prexp="${esc(p.no)}">匯出 ${esc(p.no)}</button>`).join('')}
+        </div>
+      </div></div>`;
+  }).join('');
+  void byId;
+}
+
+function openFreeze(pkgIdx) {
+  const pkg = state.packages[pkgIdx];
+  if (!pkg) return;
+  const items = pkgItems(pkg);
+  const prev = latestBaseline(pkg.code);
+  const d = prev ? B.diffAgainstBaseline(items, prev, state.settings) : null;
+  const s = Q.summarize(items, state.settings);
+  dialog(`凍結為基準版 — ${esc(pkg.code)}`, `
+    <p>將 <b>${items.length}</b> 項、預估 <b>NT$ ${Q.fmt(s.cost, 0)}</b> 凍結為
+    ${prev ? `第 <b>${prev.rev + 1}</b> 版（取代 ${esc(prev.code)}）` : '第 <b>1</b> 版'}。</p>
+    ${d && d.dirty ? `<p class="chip warn" style="display:block;padding:7px 10px">較 ${esc(prev.code)} 已有 ${d.changed.length} 項異動，金額差 ${Q.fmt(d.costDelta, 0)}。</p>` : ''}
+    <div class="fgrid">
+      <div><label class="f">工程確認人（必填）</label><input type="text" id="bBy" placeholder="姓名／職稱"></div>
+      <div style="grid-column:1/-1"><label class="f">備註</label><input type="text" id="bNote" placeholder="例：依 RFI-001 回覆修正後凍結"></div>
+    </div>
+    <p class="hint" style="margin-top:10px">凍結<b>不會</b>鎖住資料 —— 之後還是能改。基準版的用途是讓「改了什麼、誰改的、差多少錢」
+    無所遁形：凍結後任何異動都會在這張卡片與清單上被標出來。沒有確認人的快照不是基準版，只是一份沒人負責的檔案。</p>`,
+    [{ label: '取消' }, {
+      label: '凍結', primary: true, fn: () => {
+        const r = B.freezeBaseline(pkg, items, state.settings, {
+          confirmedBy: $('#bBy').value, note: $('#bNote').value,
+          previous: prev, existing: state.baselines,
+        });
+        if (r.error) return setTimeout(() => dialog('無法凍結', `<p>${esc(r.error)}</p>`), 40);
+        state.baselines.push(r.baseline);
+        renderAll();
+        setTimeout(() => dialog('已凍結', `<p>${esc(r.baseline.code)}（rev ${r.baseline.rev}）已建立，可由它產生請購單。</p>`), 40);
+      },
+    }]);
+}
+
+function openBaselineDetail(id) {
+  const bl = state.baselines.find((b) => b.id === id);
+  if (!bl) return;
+  dialog(`${bl.code} 明細（rev ${bl.rev}）`, `
+    <p class="hint">${esc(bl.packageName || bl.packageCode)} · 凍結 ${esc(bl.frozenAt.slice(0, 16).replace('T', ' '))} · 工程確認 ${esc(bl.confirmedBy)}</p>
+    <div style="max-height:52vh;overflow:auto"><table class="difftbl">
+      <thead><tr><th>工項</th><th>料號</th><th style="text-align:right">建議採購量</th><th style="text-align:right">下單量</th><th style="text-align:right">單價</th><th style="text-align:right">金額</th><th>可信度</th></tr></thead>
+      <tbody>${bl.items.map((s) => `<tr>
+        <td>${esc(s.name)}<div class="hint">${esc(s.code)} · ${esc(s.spec)}</div></td>
+        <td>${s.erpCode ? esc(s.erpCode) : '<span style="color:var(--bad)">缺</span>'}</td>
+        <td class="n">${Q.fmt(s.suggestQty, 2)} ${esc(s.unit)}</td>
+        <td class="n">${Q.fmt(s.orderQty, 2)} ${esc(s.orderUnit || s.unit)}</td>
+        <td class="n">${Q.fmt(s.unitPrice, 2)}</td>
+        <td class="n">${Q.fmt(s.cost, 0)}</td>
+        <td><span class="chip band${s.band}">${s.band}</span></td></tr>`).join('')}</tbody>
+      <tfoot><tr><th colspan="5">合計</th><th class="n">${Q.fmt(bl.totals.cost, 0)}</th><th></th></tr></tfoot>
+    </table></div>`);
+}
+
+function openBaselineDiff(id) {
+  const bl = state.baselines.find((b) => b.id === id);
+  const pkg = bl && state.packages.find((p) => p.code === bl.packageCode);
+  if (!bl || !pkg) return;
+  const d = B.diffAgainstBaseline(pkgItems(pkg), bl, state.settings);
+  const fmtV = (v, kind) => (kind === 'number' ? Q.fmt(v, 2) : esc(String(v ?? '')));
+  dialog(`較 ${bl.code} 的變更`, `
+    <p>金額差 <b class="${d.costDelta >= 0 ? 'neg' : 'pos'}">${d.costDelta >= 0 ? '+' : ''}${Q.fmt(d.costDelta, 0)}</b></p>
+    ${d.changed.length ? `<table class="difftbl"><thead><tr><th>工項</th><th>欄位</th><th style="text-align:right">基準版</th><th style="text-align:right">現在</th><th style="text-align:right">差異</th></tr></thead>
+      <tbody>${d.changed.flatMap((ch) => ch.fields.map((f, i) => `<tr>
+        <td>${i === 0 ? `${esc(ch.name)}<div class="hint">${esc(ch.code)}</div>` : ''}</td>
+        <td>${esc(f.label)}</td>
+        <td class="n dl">${fmtV(f.before, f.kind)}</td>
+        <td class="n dn">${fmtV(f.after, f.kind)}</td>
+        <td class="n ${f.delta > 0 ? 'neg' : f.delta < 0 ? 'pos' : ''}">${f.delta == null ? '—' : (f.delta > 0 ? '+' : '') + Q.fmt(f.delta, 2)}</td></tr>`)).join('')}</tbody></table>` : '<p class="hint">沒有欄位異動。</p>'}
+    ${d.added.length ? `<p class="hint" style="margin-top:10px">新增 ${d.added.length} 項：${d.added.map((a) => esc(a.name)).join('、')}</p>` : ''}
+    ${d.removed.length ? `<p class="hint">移除 ${d.removed.length} 項：${d.removed.map((a) => esc(a.name)).join('、')}</p>` : ''}
+    <p class="hint" style="margin-top:10px">要讓這些變更成為新的採購依據，請重新凍結產生下一版基準版 ——
+    每一版都留有誰確認、何時、為什麼。</p>`,
+    [{ label: '關閉' }, { label: '重新凍結', primary: true, fn: () => openFreeze(state.packages.indexOf(pkg)) }]);
+}
+
+function openCreatePr(id) {
+  const bl = state.baselines.find((b) => b.id === id);
+  if (!bl) return;
+  const ready = B.prReadiness(bl, { requireErpCode: state.settings.requireErpCode });
+  const nextNo = B.nextPrNo(state.prs.map((p) => p.no), state.settings.prTemplate, new Date());
+  const missHtml = ready.ok ? '' : `
+    ${ready.missingCode.length ? `<p class="chip bad" style="display:block;padding:7px 10px">${ready.missingCode.length} 項缺 ERP 料號。ERP 匯入沒有料號一定退件，先補齊：</p>
+      <div style="max-height:26vh;overflow:auto;margin:6px 0">${ready.missingCode.map((s) => `<div class="docrow">
+        <span class="dn">${esc(s.name)}<span class="hint"> ${esc(s.code)}</span></span>
+        <input type="text" data-erp="${esc(s.code)}" placeholder="ERP 料號" style="width:170px"></div>`).join('')}</div>` : ''}
+    ${ready.missingPrice.length ? `<p class="chip warn" style="display:block;padding:7px 10px">${ready.missingPrice.length} 項未報價，金額會是空的：${ready.missingPrice.map((s) => esc(s.name)).join('、')}</p>` : ''}`;
+  dialog(`產生請購單 — ${esc(bl.code)}`, `
+    <p>單號將為 <b>${esc(nextNo)}</b>（樣板 <code>${esc(state.settings.prTemplate)}</code>，
+    流水號每${{ day: '日', month: '月', year: '年', never: '（不）' }[B.resetScopeOf(state.settings.prTemplate)]}重置）</p>
+    ${missHtml}
+    <div class="fgrid">
+      <div><label class="f">請購人（必填）</label><input type="text" id="pReq" placeholder="姓名"></div>
+      <div><label class="f">部門</label><input type="text" id="pDept" value="${esc(state.settings.dept || '')}"></div>
+      <div><label class="f">專案</label><input type="text" id="pProj" value="${esc(state.projName || '')}"></div>
+      <div><label class="f">建議供應商</label><input type="text" id="pVend" value="${esc((state.packages.find((p) => p.code === bl.packageCode) || {}).vendor || '')}"></div>
+      <div><label class="f">需求日期</label><input type="date" id="pNeed" value="${esc((state.packages.find((p) => p.code === bl.packageCode) || {}).needDate || '')}"></div>
+      <div><label class="f">稅率</label><input type="number" id="pTax" step="0.01" value="${state.settings.taxRate}"></div>
+    </div>
+    <p class="hint" style="margin-top:10px">單價會自動換算到訂購單位 —— 6M/支的管子，單價寫的是每支而不是每公尺，
+    否則 ERP 那邊金額會差六倍。</p>`,
+    [{ label: '取消' }, {
+      label: '產生', primary: true, fn: () => {
+        $$('#dlgBody [data-erp]').forEach((inp) => {
+          const v = inp.value.trim(); if (!v) return;
+          const it = state.itemByCode.get(inp.dataset.erp);
+          if (it) it.erpCode = v;
+          const sn = bl.items.find((x) => x.code === inp.dataset.erp);
+          if (sn) sn.erpCode = v;
+        });
+        const r = B.createPr(bl, {
+          requester: $('#pReq').value, dept: $('#pDept').value, project: $('#pProj').value,
+          vendor: $('#pVend').value, needDate: $('#pNeed').value,
+          taxRate: parseFloat($('#pTax').value), template: state.settings.prTemplate,
+        }, state.prs.map((p) => p.no));
+        if (r.error) return setTimeout(() => dialog('無法產生', `<p>${esc(r.error)}</p>`), 40);
+        state.prs.push(r.pr);
+        renderAll();
+        setTimeout(() => openExportPr(r.pr.no), 60);
+      },
+    }]);
+}
+
+function openExportPr(no) {
+  const pr = state.prs.find((p) => p.no === no);
+  if (!pr) return;
+  const prof = state.settings.erpProfile || 'generic';
+  dialog(`請購單 ${esc(pr.no)}`, `
+    <div class="hint">${esc(pr.packageName || pr.packageCode)} · 基準版 ${esc(pr.baselineCode)} · 請購人 ${esc(pr.requester)}${pr.needDate ? ` · 需求日 ${esc(pr.needDate)}` : ''}</div>
+    <div class="totrow" style="margin-top:8px"><span>未稅</span><b>NT$ ${Q.fmt(pr.subtotal, 0)}</b></div>
+    <div class="totrow"><span>稅額（${(pr.taxRate * 100).toFixed(0)}%）</span><b>NT$ ${Q.fmt(pr.tax, 0)}</b></div>
+    <div class="totrow"><span>含稅合計</span><b>NT$ ${Q.fmt(pr.total, 0)}</b></div>
+    <div style="max-height:34vh;overflow:auto;margin-top:10px"><table class="difftbl">
+      <thead><tr><th>#</th><th>料號</th><th>品名規格</th><th style="text-align:right">數量</th><th>單位</th><th style="text-align:right">單價</th><th style="text-align:right">金額</th></tr></thead>
+      <tbody>${pr.lines.map((l) => `<tr><td>${l.seq}</td><td>${esc(l.erpCode) || '<span style="color:var(--bad)">缺</span>'}</td>
+        <td>${esc(l.name)}<div class="hint">${esc(l.spec)}</div></td>
+        <td class="n">${Q.fmt(l.qty, 2)}</td><td>${esc(l.unit)}</td>
+        <td class="n">${Q.fmt(l.unitPrice, 2)}</td><td class="n">${Q.fmt(l.amount, 0)}</td></tr>`).join('')}</tbody></table></div>
+    <h4 style="margin:14px 0 6px">匯入 ERP</h4>
+    <div class="fgrid">
+      <div><label class="f">檔案格式</label><select id="eProf">${Object.values(B.ERP_PROFILES).map((p) => `<option value="${p.key}" ${prof === p.key ? 'selected' : ''}>${p.label}</option>`).join('')}</select></div>
+      <div style="align-self:end"><button class="btn" id="eMap">設定欄位對映</button></div>
+    </div>
+    <p class="hint" style="margin-top:10px">本工具不綁任何一套 ERP：中性資料模型 + 可設定的欄位對映。
+    把對方的欄位名稱填進對映表，匯出的 CSV 就能直接餵進去。</p>`,
+    [{ label: '關閉' }, { label: '下載 CSV', primary: true, fn: () => downloadPr(pr.no, $('#eProf') ? $('#eProf').value : prof) }],
+    (body) => {
+      body.querySelector('#eProf').onchange = (e) => { state.settings.erpProfile = e.target.value; persist(); };
+      body.querySelector('#eMap').onclick = () => { $('#dlg').close(); setTimeout(() => openErpMapping(pr.no), 60); };
+    });
+}
+
+function openErpMapping(no) {
+  const m = state.settings.erpMapping || { header: {}, line: {} };
+  const row = (kind, f) => `<div class="docrow">
+    <span class="dn" style="width:130px">${esc(f.label)}</span>
+    <span class="hint" style="width:110px"><code>${esc(f.key)}</code></span>
+    <input type="text" data-map="${kind}:${esc(f.key)}" value="${esc((m[kind] || {})[f.key] || '')}" placeholder="${esc(f.label)}"></div>`;
+  dialog('ERP 欄位對映', `
+    <p class="hint">留白＝沿用左邊的中文欄名。填入你們 ERP 匯入範本的欄位名稱（例如 <code>PURCH_NO</code>、<code>ITEM_NO</code>），
+    匯出的 CSV 表頭就會用那個名字。</p>
+    <h4 style="margin:12px 0 6px">表頭</h4>
+    <div style="max-height:24vh;overflow:auto;display:grid;gap:5px">${B.PR_HEADER_FIELDS.map((f) => row('header', f)).join('')}</div>
+    <h4 style="margin:12px 0 6px">明細</h4>
+    <div style="max-height:24vh;overflow:auto;display:grid;gap:5px">${B.PR_LINE_FIELDS.map((f) => row('line', f)).join('')}</div>`,
+    [{ label: '取消' }, {
+      label: '儲存', primary: true, fn: () => {
+        const next = { header: {}, line: {} };
+        $$('#dlgBody [data-map]').forEach((inp) => {
+          const [kind, key] = inp.dataset.map.split(':');
+          const v = inp.value.trim();
+          if (v) next[kind][key] = v;
+        });
+        state.settings.erpMapping = next;
+        persist();
+        setTimeout(() => openExportPr(no), 60);
+      },
+    }]);
+}
+
+function downloadPr(no, profile) {
+  const pr = state.prs.find((p) => p.no === no);
+  if (!pr) return;
+  const { files } = B.toErpTables(pr, profile || state.settings.erpProfile, state.settings.erpMapping || {});
+  for (const f of files) download(f.name, f.rows.map((r) => r.map(csvCell).join(',')).join('\n'));
+}
+
 /* ══════════ 對話框 ══════════ */
 
 function dialog(title, html, buttons = [{ label: '關閉' }], onBody) {
@@ -917,6 +1184,7 @@ function openSourceDialog(code) {
       <div><label class="f">每訂購單位含量 (${esc(it.unit)})</label><input type="number" id="oFactor" step="0.001" value="${it.order.unitFactor ?? 1}"></div>
       <div><label class="f">包裝倍數</label><input type="number" id="oPack" step="1" min="1" value="${it.order.packMultiple ?? 1}"></div>
       <div><label class="f">MOQ（訂購單位）</label><input type="number" id="oMoq" step="1" min="0" value="${it.order.moq ?? 0}"></div>
+      <div><label class="f">ERP 料號</label><input type="text" id="mErp" value="${esc(it.erpCode || '')}" placeholder="請購單匯入 ERP 必填"></div>
     </div>
     <p class="hint" style="margin-top:10px">合約型態 <b>${esc(Q.CONTRACT_TYPES[state.settings.contractType === 'lumpsum' ? 'lumpsum' : 'remeasure'].label)}</b> 下的計價影響：
     <b class="pay ${pay.level}" style="display:inline">${esc(pay.label)}</b> — ${esc(pay.note)}</p>
@@ -935,6 +1203,7 @@ function openSourceDialog(code) {
         it.manualNote = $('#mNote').value.trim();
         const w = parseFloat($('#mWaste').value); it.wasteRate = Number.isFinite(w) ? w : it.wasteRate;
         const pr = parseFloat($('#mPrice').value); it.unitPrice = Number.isFinite(pr) ? pr : null;
+        it.erpCode = $('#mErp').value.trim();
         it.order = {
           unit: $('#oUnit').value.trim() || it.unit,
           unitFactor: parseFloat($('#oFactor').value) || 1,
@@ -993,6 +1262,18 @@ function openSettings() {
     總價承攬下同一個數字是承包商要吸收的成本。這一欄決定你看到的是機會還是風險。</p>
     <p class="hint" style="margin-top:10px">門檻是風險偏好的具體化：把 3% 調到 8%，等於宣告「圖面與標單差 8% 以內都不必解釋」。
     這個數字最終要由誰承擔差異的責任來決定，不是由方便決定。</p>
+    <h4 style="margin:14px 0 6px">請購單與 ERP</h4>
+    <div class="fgrid">
+      <div><label class="f">PR 編號樣板</label><input type="text" id="sPrTpl" value="${esc(s.prTemplate || B.DEFAULT_PR_TEMPLATE)}"></div>
+      <div><label class="f">稅率</label><input type="number" id="sTax" step="0.01" value="${s.taxRate ?? 0.05}"></div>
+      <div><label class="f">請購部門</label><input type="text" id="sDept" value="${esc(s.dept || '')}"></div>
+      <div><label class="f">匯出時必須有 ERP 料號</label><select id="sReqErp">
+        <option value="1" ${s.requireErpCode !== false ? 'selected' : ''}>是（建議）</option>
+        <option value="0" ${s.requireErpCode === false ? 'selected' : ''}>否</option></select></div>
+    </div>
+    <p class="hint" style="margin-top:8px">樣板可用 <code>{YYYY} {YY} {MM} {DD} {SEQ:n}</code>。
+    流水號的重置範圍由樣板自動推導：有 <code>{DD}</code> 就每日重置、只有 <code>{MM}</code> 就每月重置 ——
+    避免「編碼到日、流水號卻全年連續」這種自相矛盾。</p>
     <h4 style="margin:14px 0 6px">專案資料</h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" id="sExportProj">匯出專案 JSON</button>
@@ -1007,6 +1288,10 @@ function openSettings() {
         s.gateBand = $('#sGate').value;
         s.contractType = $('#sContract').value;
         s.rfiBlockSeverity = $('#sRfiGate').value;
+        s.prTemplate = $('#sPrTpl').value.trim() || B.DEFAULT_PR_TEMPLATE;
+        const tx = parseFloat($('#sTax').value); s.taxRate = Number.isFinite(tx) ? tx : 0.05;
+        s.dept = $('#sDept').value.trim();
+        s.requireErpCode = $('#sReqErp').value === '1';
         if (state.analysis) runAnalysis();
         renderAll();
       },
@@ -1219,6 +1504,8 @@ function exportProject() {
     items: state.items,
     packages: state.packages,
     rfiLog: state.rfiLog,
+    baselines: state.baselines,
+    prs: state.prs,
     selected: [...state.selected],
   };
   download(`takeoff-project-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
@@ -1236,6 +1523,8 @@ async function importProject(file) {
     state.selected = new Set(d.selected || []);
     state.settings = { ...state.settings, ...(d.settings || {}) };
     state.rfiLog = d.rfiLog || state.rfiLog;
+    state.baselines = d.baselines || state.baselines;
+    state.prs = d.prs || state.prs;
     renderAll();
     dialog('匯入完成', `<p>已載入 ${d.items.length} 筆工項狀態。</p>`);
   } catch (e) { dialog('匯入失敗', `<p>${esc(e.message)}</p>`); }
@@ -1769,4 +2058,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, runAnalysis, renderAll };
+window.__takeoff = { state, Q, DXF, A, B, runAnalysis, renderAll };

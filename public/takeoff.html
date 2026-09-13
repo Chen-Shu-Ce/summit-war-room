@@ -109,6 +109,16 @@ td.sug{font-weight:700}
 .pkg .body{padding:7px 9px;display:grid;gap:6px}
 .pkg .row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .totbar{border-top:1px solid var(--line);padding:9px 12px;display:grid;gap:5px;background:var(--panel)}
+.bl{border:1px solid var(--line);border-radius:9px;margin:8px 12px;overflow:hidden}
+.bl>header{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--line2);font-size:12px;flex-wrap:wrap}
+.bl .body{padding:7px 9px;font-size:12px;display:grid;gap:5px}
+.bl .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
+.dirty{color:var(--warn)}
+.difftbl{width:100%;border-collapse:collapse;font-size:12px}
+.difftbl th,.difftbl td{padding:3px 6px;border-bottom:1px solid var(--line2);text-align:left}
+.difftbl td.n{font-family:var(--mono);text-align:right}
+.dl{color:var(--ink3)} .dn{color:var(--ink)}
+td.blchg{color:var(--warn);font-size:11px;font-family:var(--mono)}
 .totrow{display:flex;justify-content:space-between;gap:8px}
 .totrow b{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
@@ -358,7 +368,9 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
         <button class="btn" id="btnClearCart">清空</button>
       </div>
       <h2 style="border-top:1px solid var(--line)">採購包<span class="chip" id="pkgCount">0</span></h2>
-      <div class="scroll" id="pkgs" style="max-height:38vh"></div>
+      <div class="scroll" id="pkgs" style="max-height:26vh"></div>
+      <h2 style="border-top:1px solid var(--line)">基準版 / 請購單<span class="chip" id="blCount">0</span></h2>
+      <div class="scroll" id="baselines" style="max-height:26vh"></div>
     </section>
   </div>
 </div>

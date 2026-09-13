@@ -365,10 +365,87 @@ ok('自動包已建立（含先前手動 1 包）', pkgTotal === 1 + cards, '共
 const autoFlag = await page.evaluate(() => window.__takeoff.state.packages.filter((p) => p.auto).length);
 ok('自動包標記 auto 與分組理由', autoFlag === cards);
 
+console.log('\n【7d】基準版與請購單');
+await page.locator('.pkg [data-pkg-freeze]').first().click();
+await page.waitForSelector('#dlg[open]');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(200);
+ok('沒有工程確認人不得凍結', (await page.locator('#dlgBody').innerText()).includes('工程確認人'));
+await page.locator('#dlgFoot button').last().click();
+
+await page.locator('.pkg [data-pkg-freeze]').first().click();
+await page.waitForSelector('#dlg[open]');
+await page.fill('#bBy', '工程部 李經理');
+await page.fill('#bNote', 'e2e 凍結');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(250);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+const bl1 = await page.evaluate(() => window.__takeoff.state.baselines[0]);
+ok('基準版已建立且 rev=1', bl1 && bl1.rev === 1 && bl1.confirmedBy === '工程部 李經理', JSON.stringify(bl1 && bl1.code));
+ok('基準版卡片顯示未異動', (await page.locator('.bl').first().innerText()).includes('未異動'));
+
+// 改一個數量，基準版要抓出變更
+const firstCode = bl1.items[0].code;
+await page.evaluate((c) => {
+  const it = window.__takeoff.state.itemByCode.get(c);
+  it.qty.manual = (it.qty.manual || it.qty.drawing || it.qty.boq) + 100;
+  it.manualBy = 'e2e'; it.manualNote = 'e2e 加量';
+  window.__takeoff.renderAll();
+}, firstCode);
+await page.waitForTimeout(200);
+const blTxt = await page.locator('.bl').first().innerText();
+ok('凍結後的異動會被標出來', /變更\s*\d/.test(blTxt) && blTxt.includes('金額差'), blTxt.replace(/\s+/g, ' ').slice(0, 110));
+const rowChg = await page.locator('#boqBody tr').filter({ hasText: '較 BL-' }).first().innerText();
+ok('清單列出較基準版的欄位差異', rowChg.includes('基準量') && rowChg.includes('+100'), rowChg.replace(/\s+/g, ' ').slice(0, 90));
+
+await page.locator('.bl [data-bldiff]').first().click();
+await page.waitForSelector('#dlg[open]');
+const diffTxt = await page.locator('#dlgBody').innerText();
+ok('變更對照列出基準版與現值', diffTxt.includes('基準版') && diffTxt.includes('建議採購量'), diffTxt.replace(/\s+/g, ' ').slice(0, 100));
+await page.locator('#dlgFoot button').first().click();
+
+// 產生請購單：缺料號要先補
+await page.locator('.bl [data-blpr]').first().click();
+await page.waitForSelector('#dlg[open]');
+const prDlg = await page.locator('#dlgBody').innerText();
+ok('PR 單號符合 PR-YYYYMMDD0001 格式', /PR-\d{8}0001/.test(prDlg), prDlg.slice(0, 80));
+ok('流水號重置說明為每日', prDlg.includes('每日重置'), prDlg.slice(0, 120));
+const missing = await page.locator('#dlgBody [data-erp]').count();
+ok('缺 ERP 料號會先擋下並提供補填', missing > 0, '缺 ' + missing + ' 項');
+for (let i = 0; i < missing; i++) await page.locator('#dlgBody [data-erp]').nth(i).fill(`ERP-${1000 + i}`);
+await page.fill('#pReq', '採購 陳小姐');
+await page.fill('#pNeed', '2026-12-01');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(200);
+const pr = await page.evaluate(() => window.__takeoff.state.prs[0]);
+ok('請購單已產生且帶稅額', pr && /^PR-\d{8}0001$/.test(pr.no) && pr.total > pr.subtotal, JSON.stringify(pr && pr.no));
+ok('料號已回寫工項', await page.evaluate((c) => !!window.__takeoff.state.itemByCode.get(c).erpCode, firstCode));
+const prView = await page.locator('#dlgBody').innerText();
+ok('請購單畫面列出未稅/稅額/含稅', prView.includes('未稅') && prView.includes('稅額') && prView.includes('含稅合計'));
+
+// 欄位對映 + 匯出
+await page.locator('#eMap').click();
+await page.waitForSelector('#dlg[open]');
+await page.fill('[data-map="header:no"]', 'PURCH_NO');
+await page.fill('[data-map="line:erpCode"]', 'ITEM_NO');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(250);
+const dlPr = page.waitForEvent('download');
+await page.locator('#dlgFoot button.primary').click();
+const headerCsv = await readFile(await (await dlPr).path(), 'utf8');
+ok('ERP CSV 套用自訂欄名', headerCsv.includes('PURCH_NO'), headerCsv.split('\n')[0].slice(0, 80));
+ok('ERP CSV 帶出 PR 單號', headerCsv.includes(pr.no));
+await page.waitForTimeout(300);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').first().click();
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
 const after = await page.evaluate(() => ({
+  baselines: window.__takeoff.state.baselines.length,
+  prs: window.__takeoff.state.prs.length,
   pkgs: window.__takeoff.state.packages.length,
   manual: window.__takeoff.state.itemByCode.get('710.01').qty.manual,
   draw: window.__takeoff.state.itemByCode.get('321.01').qty.drawing,
@@ -376,6 +453,7 @@ const after = await page.evaluate(() => ({
 ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預期 ${pkgTotal}`);
 ok('人工確認持久化', after.manual === 5600);
 ok('圖面量持久化', Math.abs(after.draw - 9.7124) < 0.001);
+ok('基準版與請購單持久化', after.baselines === 1 && after.prs === 1, JSON.stringify(after));
 
 console.log('\n【9】無 JS 例外');
 ok('頁面無未捕捉錯誤', errors.length === 0, errors.slice(0, 3).join(' | '));
