@@ -31,10 +31,21 @@ export const INDEPENDENT_SOURCES = ['drawing', 'boq', 'vendor'];
 export const MAX_BONUS = 12;
 
 export const DEFAULT_SETTINGS = {
-  varianceWarn: 0.03,   // 差異率 ≤ 3%：可直接採用圖面量
+  varianceWarn: 0.05,   // 差異率 ≤ 5%：可直接採用圖面量（公司容忍值）
   varianceStop: 0.10,   // 差異率 > 10%：鎖定，強制人工確認後才可轉採購
   gateBand: 'C',        // 低於此可信度等級不得轉採購包
   defaultWasteRate: 0.03,
+  contractType: 'remeasure',   // remeasure = 實作實算；lumpsum = 總價承攬
+};
+
+/**
+ * 合約型態決定「差異」的意義，這不是算術問題而是計價問題。
+ *   實作實算：數量按實際施作量計價，圖面量高於標單 → 可請領的增量，但要走數量變更／估驗計量。
+ *   總價承攬：總價固定，圖面量高於標單 → 原則上由承包商吸收，除非構成契約變更。
+ */
+export const CONTRACT_TYPES = {
+  remeasure: { key: 'remeasure', label: '實作實算', short: '實算' },
+  lumpsum: { key: 'lumpsum', label: '總價承攬', short: '總價' },
 };
 
 const EPS = 1e-9;
@@ -296,11 +307,126 @@ export function suggestPurchase(item, settings = DEFAULT_SETTINGS) {
   };
 }
 
+/**
+ * 計價影響：把「圖面量 vs BOQ 量」的差異翻譯成合約語言。
+ * 回傳 { level, label, note }，level 用於上色（ok / info / warn / bad）。
+ */
+export function paymentImpact(item, settings = DEFAULT_SETTINGS) {
+  const s = { ...DEFAULT_SETTINGS, ...settings };
+  const type = s.contractType === 'lumpsum' ? 'lumpsum' : 'remeasure';
+  const v = variance(item.qty && item.qty.drawing, item.qty && item.qty.boq);
+  if (!v) return { level: 'info', label: '—', note: '缺圖面量或 BOQ 量，無法判斷計價影響' };
+  const d = v.pct;
+  const mag = Math.abs(d);
+  const unit = item.unit || '';
+  const amt = `${fmt(Math.abs(v.abs), 2)} ${unit}`;
+  if (mag <= 0.0005) return { level: 'ok', label: '無差異', note: '圖面量與標單一致' };
+
+  if (type === 'remeasure') {
+    if (d > 0) {
+      return {
+        level: mag > s.varianceStop ? 'warn' : 'info',
+        label: `可計價增量 +${amt}`,
+        note: mag > s.varianceWarn
+          ? `實作實算：增量可請領，但差異 ${pct(d)} 已超過容忍 ${pct(s.varianceWarn)}，應先辦理數量變更／取得監造確認再施作，否則估驗時易被剔除。`
+          : `實作實算：增量依實際施作量計價，估驗計量時檢附本項數量出處即可。`,
+      };
+    }
+    return {
+      level: mag > s.varianceWarn ? 'warn' : 'info',
+      label: `計價減量 −${amt}`,
+      note: `實作實算：實作量低於標單，估驗時將扣減 ${amt}。採購若照標單量下單會多買，請以圖面量為採購基準。`,
+    };
+  }
+  // 總價承攬
+  if (d > 0) {
+    return {
+      level: mag > s.varianceWarn ? 'bad' : 'warn',
+      label: `自行吸收風險 +${amt}`,
+      note: `總價承攬：超出標單的 ${amt} 原則上由承包商吸收。若屬設計變更或標單漏項，必須在施作前提出變更主張並留證，事後難以追償。`,
+    };
+  }
+  return {
+    level: 'ok',
+    label: `潛在節餘 −${amt}`,
+    note: `總價承攬：實作量低於標單，價差為承包商節餘。仍須確認不是漏算或漏繪造成的假節餘。`,
+  };
+}
+
 /** 千分位格式化。 */
 export function fmt(v, digits = 0) {
   if (!isNum(v)) return '—';
   const d = Number.isInteger(v) ? 0 : digits;
   return v.toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: Math.max(d, digits) });
+}
+
+/**
+ * 前置期分桶。拆包的第一原則是「不要讓快的被慢的綁架」——
+ * 一個包的交期等於包裡最慢那一項，所以前置期差一個量級的東西不該同包。
+ */
+export const LEAD_BUCKETS = [
+  { key: 'spot', max: 14, label: '即時料', note: '兩週內可到，接近下單即用' },
+  { key: 'short', max: 45, label: '短前置', note: '一個半月內，按施工排程滾動下單' },
+  { key: 'mid', max: 90, label: '中前置', note: '三個月內，需併入採購主排程' },
+  { key: 'long', max: Infinity, label: '長前置', note: '超過三個月，屬要徑物料，應優先發包' },
+];
+
+export function leadBucket(days) {
+  const d = isNum(days) ? days : 0;
+  return LEAD_BUCKETS.find((b) => d <= b.max) || LEAD_BUCKETS[LEAD_BUCKETS.length - 1];
+}
+
+/**
+ * 依「前置期分桶 × 供應商」自動建議拆包。
+ * 未通過閘門（鎖定或可信度不足）的項目一律排除並回報原因 —— 不讓有問題的量混進 RFQ。
+ * opts: { today: Date, bufferDays: number }
+ */
+export function suggestPackages(items, settings = DEFAULT_SETTINGS, opts = {}) {
+  const s = { ...DEFAULT_SETTINGS, ...settings };
+  const buffer = isNum(opts.bufferDays) ? opts.bufferDays : 7;
+  const today = opts.today instanceof Date ? opts.today : new Date();
+  const groups = new Map();
+  const excluded = [];
+
+  for (const it of items) {
+    const p = suggestPurchase(it, s);
+    const c = confidence(it, { settings: s, basis: p.basis });
+    if (p.blocked || !bandAtLeast(c.band, s.gateBand)) {
+      excluded.push({ code: it.code, name: it.name, reason: p.blocked ? p.basis.rule : `可信度 ${c.band} 低於門檻 ${s.gateBand}` });
+      continue;
+    }
+    const b = leadBucket(it.leadTimeDays);
+    const vendor = (it.vendor || '').trim();
+    const key = `${b.key}|${vendor}`;
+    if (!groups.has(key)) groups.set(key, { bucket: b, vendor, items: [], cost: 0, maxLead: 0 });
+    const g = groups.get(key);
+    g.items.push(it);
+    if (isNum(p.cost)) g.cost += p.cost;
+    g.maxLead = Math.max(g.maxLead, it.leadTimeDays || 0);
+  }
+
+  // 長前置在前：要徑物料要先發包，排序本身就是提醒
+  const order = { long: 0, mid: 1, short: 2, spot: 3 };
+  const list = [...groups.values()].sort((a, b) =>
+    (order[a.bucket.key] - order[b.bucket.key]) || (b.maxLead - a.maxLead) || a.vendor.localeCompare(b.vendor));
+
+  return {
+    packages: list.map((g, i) => {
+      const need = new Date(today.getTime() + (g.maxLead + buffer) * 86400000);
+      return {
+        code: `PKG-${g.bucket.key.toUpperCase()}-${String(i + 1).padStart(2, '0')}`,
+        name: `${g.bucket.label}${g.vendor ? ` · ${g.vendor}` : ''}（最長前置 ${g.maxLead} 天）`,
+        vendor: g.vendor,
+        needDate: need.toISOString().slice(0, 10),
+        itemCodes: g.items.map((x) => x.code),
+        bucket: g.bucket.key,
+        maxLead: g.maxLead,
+        cost: roundTo(g.cost, 2),
+        reason: `${g.bucket.note}；同包內前置期同一量級，交期不會被拖累。`,
+      };
+    }),
+    excluded,
+  };
 }
 
 /** 整份清單的彙總，用於右欄與採購包統計。 */

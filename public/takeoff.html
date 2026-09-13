@@ -62,6 +62,10 @@ label.f{display:block;font-size:11px;color:var(--ink3);margin:0 0 2px}
 .chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
 .chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
 .chip.acc{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.pay{display:block;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
+.pay.ok{color:var(--ok)} .pay.info{color:var(--ink2)} .pay.warn{color:var(--warn)} .pay.bad{color:var(--bad)}
+.sugpkg{border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:8px;display:flex;gap:9px;align-items:flex-start}
+.sugpkg .g{flex:1;min-width:0}
 .muted{color:var(--ink3)}
 .hint{font-size:11px;color:var(--ink3)}
 
@@ -208,7 +212,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
               <th style="width:44px">單位</th>
               <th class="num" style="width:82px">圖面量</th>
               <th class="num" style="width:82px">BOQ量</th>
-              <th class="num" style="width:88px">差異</th>
+              <th class="num" style="width:158px">差異 / 計價影響</th>
               <th style="width:96px">正式採購基準</th>
               <th style="width:74px">可信度</th>
               <th class="num" style="width:80px">損耗率 %</th>
@@ -258,6 +262,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
       <div class="totbar" id="totals"></div>
       <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
         <button class="btn primary" id="btnToPkg">轉採購 Package</button>
+        <button class="btn" id="btnAutoPkg">自動建議拆包</button>
         <button class="btn" id="btnClearCart">清空</button>
       </div>
       <h2 style="border-top:1px solid var(--line)">採購包<span class="chip" id="pkgCount">0</span></h2>

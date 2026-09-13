@@ -5,196 +5,621 @@
   "settings": {
     "currency": "TWD",
     "defaultWasteRate": 0.03,
-    "varianceWarn": 0.03,
-    "varianceStop": 0.10,
-    "gateBand": "C"
+    "varianceWarn": 0.05,
+    "varianceStop": 0.1,
+    "gateBand": "C",
+    "contractType": "remeasure"
   },
   "nodes": [
-    { "code": "03", "name": "混凝土工程", "parent": null },
-    { "code": "03.21", "name": "鋼筋", "parent": "03" },
-    { "code": "03.30", "name": "場鑄混凝土", "parent": "03" },
-    { "code": "03.30.53", "name": "結構混凝土", "parent": "03.30" },
-    { "code": "03.30.55", "name": "模板", "parent": "03.30" },
-
-    { "code": "22", "name": "給排水", "parent": null },
-    { "code": "22.11", "name": "給水管路", "parent": "22" },
-    { "code": "22.13", "name": "排水管路", "parent": "22" },
-
-    { "code": "23", "name": "空調通風", "parent": null },
-    { "code": "23.21", "name": "冰水管路", "parent": "23" },
-    { "code": "23.31", "name": "風管", "parent": "23" },
-
-    { "code": "26", "name": "電氣", "parent": null },
-    { "code": "26.05", "name": "電氣通用", "parent": "26" },
-    { "code": "26.05.19", "name": "低壓電力電纜", "parent": "26.05" },
-    { "code": "26.05.33", "name": "配管與線槽", "parent": "26.05" },
-    { "code": "26.24", "name": "配電盤", "parent": "26" },
-    { "code": "26.51", "name": "照明", "parent": "26" },
-
-    { "code": "27", "name": "通訊弱電", "parent": null },
-    { "code": "27.15", "name": "通訊佈線", "parent": "27" }
+    {
+      "code": "03",
+      "name": "混凝土工程",
+      "parent": null
+    },
+    {
+      "code": "03.21",
+      "name": "鋼筋",
+      "parent": "03"
+    },
+    {
+      "code": "03.30",
+      "name": "場鑄混凝土",
+      "parent": "03"
+    },
+    {
+      "code": "03.30.53",
+      "name": "結構混凝土",
+      "parent": "03.30"
+    },
+    {
+      "code": "03.30.55",
+      "name": "模板",
+      "parent": "03.30"
+    },
+    {
+      "code": "22",
+      "name": "給排水",
+      "parent": null
+    },
+    {
+      "code": "22.11",
+      "name": "給水管路",
+      "parent": "22"
+    },
+    {
+      "code": "22.13",
+      "name": "排水管路",
+      "parent": "22"
+    },
+    {
+      "code": "23",
+      "name": "空調通風",
+      "parent": null
+    },
+    {
+      "code": "23.21",
+      "name": "冰水管路",
+      "parent": "23"
+    },
+    {
+      "code": "23.31",
+      "name": "風管",
+      "parent": "23"
+    },
+    {
+      "code": "26",
+      "name": "電氣",
+      "parent": null
+    },
+    {
+      "code": "26.05",
+      "name": "電氣通用",
+      "parent": "26"
+    },
+    {
+      "code": "26.05.19",
+      "name": "低壓電力電纜",
+      "parent": "26.05"
+    },
+    {
+      "code": "26.05.33",
+      "name": "配管與線槽",
+      "parent": "26.05"
+    },
+    {
+      "code": "26.24",
+      "name": "配電盤",
+      "parent": "26"
+    },
+    {
+      "code": "26.51",
+      "name": "照明",
+      "parent": "26"
+    },
+    {
+      "code": "27",
+      "name": "通訊弱電",
+      "parent": null
+    },
+    {
+      "code": "27.15",
+      "name": "通訊佈線",
+      "parent": "27"
+    }
   ],
   "items": [
     {
-      "code": "26.05.19.010", "wbs": "26.05.19",
-      "name": "低壓電力電纜 XLPE", "spec": "600V 3C×38mm² CU/XLPE/PVC",
-      "unit": "M", "layerHints": ["E-CABLE-PWR", "E-PWR", "電纜"],
-      "qty": { "drawing": 1710, "boq": 1650, "manual": 1700, "vendor": null, "history": null },
-      "manualNote": "現場複核：管路實走長度以 1,700M 為準（含彎曲補正）", "manualBy": "電氣工程師 / 現場複核",
+      "code": "26.05.19.010",
+      "wbs": "26.05.19",
+      "name": "低壓電力電纜 XLPE",
+      "spec": "600V 3C×38mm² CU/XLPE/PVC",
+      "unit": "M",
+      "layerHints": [
+        "E-CABLE-PWR",
+        "E-PWR",
+        "電纜"
+      ],
+      "qty": {
+        "drawing": 1710,
+        "boq": 1650,
+        "manual": 1700,
+        "vendor": null,
+        "history": null
+      },
+      "manualNote": "現場複核：管路實走長度以 1,700M 為準（含彎曲補正）",
+      "manualBy": "電氣工程師 / 現場複核",
       "wasteRate": 0.03,
-      "order": { "unit": "M", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 780, "leadTimeDays": 45,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 780,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.05.19.020", "wbs": "26.05.19",
-      "name": "低壓電力電纜 XLPE", "spec": "600V 3C×22mm² CU/XLPE/PVC",
-      "unit": "M", "layerHints": ["E-CABLE-PWR"],
-      "qty": { "drawing": 946, "boq": 900, "manual": null, "vendor": null, "history": null },
+      "code": "26.05.19.020",
+      "wbs": "26.05.19",
+      "name": "低壓電力電纜 XLPE",
+      "spec": "600V 3C×22mm² CU/XLPE/PVC",
+      "unit": "M",
+      "layerHints": [
+        "E-CABLE-PWR"
+      ],
+      "qty": {
+        "drawing": 946,
+        "boq": 900,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.03,
-      "order": { "unit": "M", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 480, "leadTimeDays": 45,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 480,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.05.19.030", "wbs": "26.05.19",
-      "name": "接地線 PVC", "spec": "600V 1C×22mm² 綠色",
-      "unit": "M", "layerHints": ["E-GND", "接地"],
-      "qty": { "drawing": 412, "boq": 500, "manual": null, "vendor": null, "history": null },
+      "code": "26.05.19.030",
+      "wbs": "26.05.19",
+      "name": "接地線 PVC",
+      "spec": "600V 1C×22mm² 綠色",
+      "unit": "M",
+      "layerHints": [
+        "E-GND",
+        "接地"
+      ],
+      "qty": {
+        "drawing": 412,
+        "boq": 500,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.05,
-      "order": { "unit": "M", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 150, "leadTimeDays": 30,
-      "measureType": "length", "drawingSource": "auto", "closed": true, "layerMapped": false, "coverage": "partial"
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 150,
+      "leadTimeDays": 30,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": false,
+      "coverage": "partial"
     },
     {
-      "code": "26.05.33.010", "wbs": "26.05.33",
-      "name": "厚金屬管 (RSC)", "spec": "φ50mm 熱浸鍍鋅",
-      "unit": "M", "layerHints": ["E-COND", "配管"],
-      "qty": { "drawing": 1240, "boq": 1220, "manual": null, "vendor": null, "history": null },
+      "code": "26.05.33.010",
+      "wbs": "26.05.33",
+      "name": "厚金屬管 (RSC)",
+      "spec": "φ50mm 熱浸鍍鋅",
+      "unit": "M",
+      "layerHints": [
+        "E-COND",
+        "配管"
+      ],
+      "qty": {
+        "drawing": 1240,
+        "boq": 1220,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.05,
-      "order": { "unit": "支", "unitFactor": 3.66, "packMultiple": 1, "moq": 50 },
-      "unitPrice": 320, "leadTimeDays": 21,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "支",
+        "unitFactor": 3.66,
+        "packMultiple": 1,
+        "moq": 50
+      },
+      "unitPrice": 320,
+      "leadTimeDays": 21,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.05.33.020", "wbs": "26.05.33",
-      "name": "電纜架 (Cable Tray)", "spec": "梯型 600W×100H 熱浸鍍鋅",
-      "unit": "M", "layerHints": ["E-TRAY", "線架"],
-      "qty": { "drawing": 386, "boq": 360, "manual": null, "vendor": null, "history": null },
+      "code": "26.05.33.020",
+      "wbs": "26.05.33",
+      "name": "電纜架 (Cable Tray)",
+      "spec": "梯型 600W×100H 熱浸鍍鋅",
+      "unit": "M",
+      "layerHints": [
+        "E-TRAY",
+        "線架"
+      ],
+      "qty": {
+        "drawing": 386,
+        "boq": 360,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.04,
-      "order": { "unit": "節", "unitFactor": 3.0, "packMultiple": 1, "moq": 20 },
-      "unitPrice": 2450, "leadTimeDays": 35,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "節",
+        "unitFactor": 3.0,
+        "packMultiple": 1,
+        "moq": 20
+      },
+      "unitPrice": 2450,
+      "leadTimeDays": 35,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.24.010", "wbs": "26.24",
-      "name": "低壓配電盤 MCC", "spec": "480V 3P4W 800A IP54",
-      "unit": "台", "layerHints": ["E-PANEL", "MCC"],
-      "qty": { "drawing": 6, "boq": 6, "manual": null, "vendor": 6, "history": null },
+      "code": "26.24.010",
+      "wbs": "26.24",
+      "name": "低壓配電盤 MCC",
+      "spec": "480V 3P4W 800A IP54",
+      "unit": "台",
+      "layerHints": [
+        "E-PANEL",
+        "MCC"
+      ],
+      "qty": {
+        "drawing": 6,
+        "boq": 6,
+        "manual": null,
+        "vendor": 6,
+        "history": null
+      },
       "wasteRate": 0,
-      "order": { "unit": "台", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 465000, "leadTimeDays": 120,
-      "measureType": "count", "drawingSource": "auto", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "台",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 465000,
+      "leadTimeDays": 120,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.51.010", "wbs": "26.51",
-      "name": "LED 高天井燈", "spec": "150W 5000K IP65",
-      "unit": "只", "layerHints": ["E-LITE", "照明"],
-      "qty": { "drawing": 214, "boq": 198, "manual": null, "vendor": null, "history": null },
+      "code": "26.51.010",
+      "wbs": "26.51",
+      "name": "LED 高天井燈",
+      "spec": "150W 5000K IP65",
+      "unit": "只",
+      "layerHints": [
+        "E-LITE",
+        "照明"
+      ],
+      "qty": {
+        "drawing": 214,
+        "boq": 198,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.02,
-      "order": { "unit": "箱", "unitFactor": 6, "packMultiple": 1, "moq": 5 },
-      "unitPrice": 3800, "leadTimeDays": 40,
-      "measureType": "count", "drawingSource": "auto", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "箱",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 3800,
+      "leadTimeDays": 40,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "26.51.020", "wbs": "26.51",
-      "name": "緊急出口燈", "spec": "LED 雙面 附電池 90min",
-      "unit": "只", "layerHints": ["E-EXIT"],
-      "qty": { "drawing": 48, "boq": 52, "manual": null, "vendor": null, "history": null },
+      "code": "26.51.020",
+      "wbs": "26.51",
+      "name": "緊急出口燈",
+      "spec": "LED 雙面 附電池 90min",
+      "unit": "只",
+      "layerHints": [
+        "E-EXIT"
+      ],
+      "qty": {
+        "drawing": 48,
+        "boq": 52,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.02,
-      "order": { "unit": "只", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 2100, "leadTimeDays": 30,
-      "measureType": "count", "drawingSource": "auto", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "只",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 2100,
+      "leadTimeDays": 30,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "27.15.010", "wbs": "27.15",
-      "name": "Cat.6A UTP 網路線", "spec": "4P 23AWG LSZH",
-      "unit": "M", "layerHints": ["T-DATA", "弱電"],
-      "qty": { "drawing": 5820, "boq": 5200, "manual": null, "vendor": null, "history": 5400 },
+      "code": "27.15.010",
+      "wbs": "27.15",
+      "name": "Cat.6A UTP 網路線",
+      "spec": "4P 23AWG LSZH",
+      "unit": "M",
+      "layerHints": [
+        "T-DATA",
+        "弱電"
+      ],
+      "qty": {
+        "drawing": 5820,
+        "boq": 5200,
+        "manual": null,
+        "vendor": null,
+        "history": 5400
+      },
       "wasteRate": 0.08,
-      "order": { "unit": "箱", "unitFactor": 305, "packMultiple": 1, "moq": 5 },
-      "unitPrice": 4200, "leadTimeDays": 25,
-      "measureType": "length", "drawingSource": "auto", "closed": true, "layerMapped": false, "coverage": "partial"
+      "order": {
+        "unit": "箱",
+        "unitFactor": 305,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 4200,
+      "leadTimeDays": 25,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": false,
+      "coverage": "partial"
     },
     {
-      "code": "22.11.010", "wbs": "22.11",
-      "name": "不鏽鋼給水管", "spec": "SUS304 φ50 Sch10",
-      "unit": "M", "layerHints": ["P-DOMW", "給水"],
-      "qty": { "drawing": 620, "boq": 600, "manual": null, "vendor": null, "history": null },
+      "code": "22.11.010",
+      "wbs": "22.11",
+      "name": "不鏽鋼給水管",
+      "spec": "SUS304 φ50 Sch10",
+      "unit": "M",
+      "layerHints": [
+        "P-DOMW",
+        "給水"
+      ],
+      "qty": {
+        "drawing": 620,
+        "boq": 600,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.05,
-      "order": { "unit": "支", "unitFactor": 6, "packMultiple": 1, "moq": 10 },
-      "unitPrice": 1180, "leadTimeDays": 30,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "支",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 1180,
+      "leadTimeDays": 30,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "22.13.010", "wbs": "22.13",
-      "name": "PVC 排水管", "spec": "A 級 φ100",
-      "unit": "M", "layerHints": ["P-SANR", "排水"],
-      "qty": { "drawing": 480, "boq": 520, "manual": null, "vendor": null, "history": null },
+      "code": "22.13.010",
+      "wbs": "22.13",
+      "name": "PVC 排水管",
+      "spec": "A 級 φ100",
+      "unit": "M",
+      "layerHints": [
+        "P-SANR",
+        "排水"
+      ],
+      "qty": {
+        "drawing": 480,
+        "boq": 520,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.06,
-      "order": { "unit": "支", "unitFactor": 4, "packMultiple": 1, "moq": 20 },
-      "unitPrice": 420, "leadTimeDays": 14,
-      "measureType": "length", "drawingSource": "auto", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "支",
+        "unitFactor": 4,
+        "packMultiple": 1,
+        "moq": 20
+      },
+      "unitPrice": 420,
+      "leadTimeDays": 14,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "23.21.010", "wbs": "23.21",
-      "name": "冰水鋼管", "spec": "SGP φ150 附保溫 50mm",
-      "unit": "M", "layerHints": ["M-CHWS", "冰水"],
-      "qty": { "drawing": 340, "boq": 330, "manual": null, "vendor": null, "history": null },
+      "code": "23.21.010",
+      "wbs": "23.21",
+      "name": "冰水鋼管",
+      "spec": "SGP φ150 附保溫 50mm",
+      "unit": "M",
+      "layerHints": [
+        "M-CHWS",
+        "冰水"
+      ],
+      "qty": {
+        "drawing": 340,
+        "boq": 330,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.05,
-      "order": { "unit": "支", "unitFactor": 6, "packMultiple": 1, "moq": 10 },
-      "unitPrice": 3600, "leadTimeDays": 45,
-      "measureType": "length", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "支",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 3600,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "23.31.010", "wbs": "23.31",
-      "name": "鍍鋅鐵板風管", "spec": "低壓 t=0.8mm 含吊架",
-      "unit": "M2", "layerHints": ["M-DUCT", "風管"],
-      "qty": { "drawing": 1860, "boq": 1740, "manual": null, "vendor": null, "history": null },
+      "code": "23.31.010",
+      "wbs": "23.31",
+      "name": "鍍鋅鐵板風管",
+      "spec": "低壓 t=0.8mm 含吊架",
+      "unit": "M2",
+      "layerHints": [
+        "M-DUCT",
+        "風管"
+      ],
+      "qty": {
+        "drawing": 1860,
+        "boq": 1740,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.12,
-      "order": { "unit": "M2", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 1450, "leadTimeDays": 35,
-      "measureType": "area", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "M2",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 1450,
+      "leadTimeDays": 35,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "03.30.53.010", "wbs": "03.30.53",
-      "name": "結構混凝土", "spec": "f'c=280 kgf/cm² 泵送",
-      "unit": "M3", "layerHints": ["S-CONC", "混凝土"],
-      "qty": { "drawing": 2480, "boq": 2450, "manual": null, "vendor": null, "history": null },
+      "code": "03.30.53.010",
+      "wbs": "03.30.53",
+      "name": "結構混凝土",
+      "spec": "f'c=280 kgf/cm² 泵送",
+      "unit": "M3",
+      "layerHints": [
+        "S-CONC",
+        "混凝土"
+      ],
+      "qty": {
+        "drawing": 2480,
+        "boq": 2450,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.03,
-      "order": { "unit": "M3", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 3100, "leadTimeDays": 7,
-      "measureType": "volume", "drawingSource": "measure", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "M3",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 3100,
+      "leadTimeDays": 7,
+      "measureType": "volume",
+      "drawingSource": "measure",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     },
     {
-      "code": "03.30.55.010", "wbs": "03.30.55",
-      "name": "普通模板", "spec": "含組立拆除 3 次周轉",
-      "unit": "M2", "layerHints": ["S-FORM", "模板"],
-      "qty": { "drawing": 9120, "boq": 8800, "manual": null, "vendor": null, "history": null },
+      "code": "03.30.55.010",
+      "wbs": "03.30.55",
+      "name": "普通模板",
+      "spec": "含組立拆除 3 次周轉",
+      "unit": "M2",
+      "layerHints": [
+        "S-FORM",
+        "模板"
+      ],
+      "qty": {
+        "drawing": 9120,
+        "boq": 8800,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.05,
-      "order": { "unit": "M2", "unitFactor": 1, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 620, "leadTimeDays": 10,
-      "measureType": "area", "drawingSource": "measure", "closed": false, "layerMapped": true, "coverage": "partial"
+      "order": {
+        "unit": "M2",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 620,
+      "leadTimeDays": 10,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "closed": false,
+      "layerMapped": true,
+      "coverage": "partial"
     },
     {
-      "code": "03.21.010", "wbs": "03.21",
-      "name": "竹節鋼筋", "spec": "SD420W #8 (D25)",
-      "unit": "KG", "layerHints": ["S-REBAR", "鋼筋"],
-      "qty": { "drawing": 186400, "boq": 182000, "manual": null, "vendor": null, "history": null },
+      "code": "03.21.010",
+      "wbs": "03.21",
+      "name": "竹節鋼筋",
+      "spec": "SD420W #8 (D25)",
+      "unit": "KG",
+      "layerHints": [
+        "S-REBAR",
+        "鋼筋"
+      ],
+      "qty": {
+        "drawing": 186400,
+        "boq": 182000,
+        "manual": null,
+        "vendor": null,
+        "history": null
+      },
       "wasteRate": 0.04,
-      "order": { "unit": "噸", "unitFactor": 1000, "packMultiple": 1, "moq": 0 },
-      "unitPrice": 24.5, "leadTimeDays": 21,
-      "measureType": "weight", "drawingSource": "auto", "closed": true, "layerMapped": true, "coverage": "full"
+      "order": {
+        "unit": "噸",
+        "unitFactor": 1000,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 24.5,
+      "leadTimeDays": 21,
+      "measureType": "weight",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
     }
   ]
 }

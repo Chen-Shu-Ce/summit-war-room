@@ -189,6 +189,46 @@ const csv = await readFile(await file.path(), 'utf8');
 ok('CSV 含表頭與稽核欄', csv.includes('正式採購基準') && csv.includes('判定規則') && csv.includes('數量出處'));
 ok('CSV 含 1751 建議採購量', csv.includes('1751'), csv.split('\n')[1] || '');
 
+console.log('\n【7b】合約型態與計價影響');
+const payTxt = await page.locator('tr[data-code="23.21.010"] .pay').innerText();
+ok('實作實算下標示可計價增量', payTxt.includes('可計價增量'), payTxt);
+const payNote = await page.locator('tr[data-code="23.21.010"] .pay').getAttribute('title');
+ok('滑鼠提示帶出估驗計量說明', /實作實算/.test(payNote), String(payNote).slice(0, 60));
+const payDown = await page.locator('tr[data-code="22.13.010"] .pay').innerText();
+ok('實作量低於標單標示計價減量', payDown.includes('計價減量'), payDown);
+await page.locator('#btnSettings').click();
+await page.waitForSelector('#dlg[open]');
+ok('參數頁預設容忍 5%', await page.inputValue('#sWarn') === '0.05', await page.inputValue('#sWarn'));
+ok('參數頁預設實作實算', await page.inputValue('#sContract') === 'remeasure');
+await page.selectOption('#sContract', 'lumpsum');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(150);
+const payLump = await page.locator('tr[data-code="23.21.010"] .pay').innerText();
+ok('切成總價承攬後改標自行吸收風險', payLump.includes('自行吸收'), payLump);
+await page.locator('#btnSettings').click();
+await page.waitForSelector('#dlg[open]');
+await page.selectOption('#sContract', 'remeasure');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(150);
+
+console.log('\n【7c】自動建議拆包');
+await page.evaluate(() => {
+  window.__takeoff.state.selected = new Set(['26.05.19.010', '26.05.33.010', '26.24.010', '22.13.010', '23.21.010']);
+});
+await page.locator('#btnAutoPkg').click();
+await page.waitForSelector('#dlg[open]');
+const cards = await page.locator('.sugpkg').count();
+ok('依前置期分出多個包', cards >= 3, '包數 ' + cards);
+const firstCard = await page.locator('.sugpkg').first().innerText();
+ok('長前置（120 天配電盤）排最前', firstCard.includes('長前置') && firstCard.includes('配電盤'), firstCard.replace(/\s+/g, ' ').slice(0, 90));
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(200);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+const pkgTotal = await page.evaluate(() => window.__takeoff.state.packages.length);
+ok('自動包已建立（含先前手動 1 包）', pkgTotal === 1 + cards, '共 ' + pkgTotal);
+const autoFlag = await page.evaluate(() => window.__takeoff.state.packages.filter((p) => p.auto).length);
+ok('自動包標記 auto 與分組理由', autoFlag === cards);
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
@@ -197,7 +237,7 @@ const after = await page.evaluate(() => ({
   manual: window.__takeoff.state.itemByCode.get('27.15.010').qty.manual,
   draw: window.__takeoff.state.itemByCode.get('26.05.19.010').qty.drawing,
 }));
-ok('採購包持久化', after.pkgs === 1);
+ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預期 ${pkgTotal}`);
 ok('人工確認持久化', after.manual === 5600);
 ok('圖面量持久化', Math.abs(after.draw - 9.7124) < 0.001);
 

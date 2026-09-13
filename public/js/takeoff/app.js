@@ -178,7 +178,9 @@ function varianceCell(it) {
   const a = Math.abs(v.pct);
   const cls = a <= state.settings.varianceWarn ? 'ok' : a <= state.settings.varianceStop ? 'warn' : 'bad';
   const sign = v.abs > 0 ? '+' : '';
-  return `<span class="chip ${cls}">${sign}${Q.fmt(v.abs, 2)} / ${Q.pct(v.pct)}</span>`;
+  const pay = Q.paymentImpact(it, state.settings);
+  return `<span class="chip ${cls}">${sign}${Q.fmt(v.abs, 2)} / ${Q.pct(v.pct)}</span>`
+    + `<span class="pay ${pay.level}" title="${esc(pay.note)}">${esc(pay.label)}</span>`;
 }
 
 function renderTable() {
@@ -359,6 +361,7 @@ function wire() {
   });
   $('#btnClearCart').onclick = () => { if (confirm('清空已選清單？（採購包不受影響）')) { state.selected.clear(); renderAll(); } };
   $('#btnToPkg').onclick = toPackage;
+  $('#btnAutoPkg').onclick = autoPackage;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -804,6 +807,7 @@ function dialog(title, html, buttons = [{ label: '關閉' }], onBody) {
 function openSourceDialog(code) {
   const it = state.itemByCode.get(code);
   const res = Q.resolveBasis(it, state.settings);
+  const pay = Q.paymentImpact(it, state.settings);
   const rows = Q.BASIS_PRIORITY.map((k) => {
     const meta = Q.SOURCE_META[k];
     const v = it.qty[k];
@@ -829,6 +833,8 @@ function openSourceDialog(code) {
       <div><label class="f">包裝倍數</label><input type="number" id="oPack" step="1" min="1" value="${it.order.packMultiple ?? 1}"></div>
       <div><label class="f">MOQ（訂購單位）</label><input type="number" id="oMoq" step="1" min="0" value="${it.order.moq ?? 0}"></div>
     </div>
+    <p class="hint" style="margin-top:10px">合約型態 <b>${esc(Q.CONTRACT_TYPES[state.settings.contractType === 'lumpsum' ? 'lumpsum' : 'remeasure'].label)}</b> 下的計價影響：
+    <b class="pay ${pay.level}" style="display:inline">${esc(pay.label)}</b> — ${esc(pay.note)}</p>
     <p class="hint" style="margin-top:10px">目前判定：<b>${esc(res.rule)}</b>。
     人工確認會覆蓋所有自動判定，因此<b>必須</b>填簽核人與理由 —— 沒有理由的覆寫在爭議時等同沒有依據。</p>`,
     [{ label: '取消' }, {
@@ -889,7 +895,10 @@ function openSettings() {
       <div><label class="f">差異上限（&gt; 鎖定待人工確認）</label><input type="number" id="sStop" step="0.005" min="0" value="${s.varianceStop}"></div>
       <div><label class="f">預設損耗率</label><input type="number" id="sWaste" step="0.005" min="0" value="${s.defaultWasteRate}"></div>
       <div><label class="f">轉採購最低可信度</label><select id="sGate">${['A', 'B', 'C', 'D'].map((b) => `<option ${s.gateBand === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
+      <div><label class="f">合約型態</label><select id="sContract">${Object.values(Q.CONTRACT_TYPES).map((c) => `<option value="${c.key}" ${s.contractType === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
     </div>
+    <p class="hint" style="margin-top:8px">合約型態不影響任何數量計算，只改變差異的<b>解讀</b>：實作實算下多出來的量是可請領的增量，
+    總價承攬下同一個數字是承包商要吸收的成本。這一欄決定你看到的是機會還是風險。</p>
     <p class="hint" style="margin-top:10px">門檻是風險偏好的具體化：把 3% 調到 8%，等於宣告「圖面與標單差 8% 以內都不必解釋」。
     這個數字最終要由誰承擔差異的責任來決定，不是由方便決定。</p>
     <h4 style="margin:14px 0 6px">專案資料</h4>
@@ -904,6 +913,7 @@ function openSettings() {
         s.varianceStop = parseFloat($('#sStop').value) || 0;
         s.defaultWasteRate = parseFloat($('#sWaste').value) || 0;
         s.gateBand = $('#sGate').value;
+        s.contractType = $('#sContract').value;
         renderAll();
       },
     }], (body) => {
@@ -978,6 +988,54 @@ function toPackage() {
     }]);
 }
 
+/**
+ * 自動建議拆包：依前置期分桶 × 供應商分組，長前置排最前。
+ * 只是「建議」—— 使用者逐包勾選確認才會建立，不做無聲的批次動作。
+ */
+function autoPackage() {
+  const list = selectedItems();
+  if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要打包的工項，或在左側勾選整個分類。</p>');
+  const r = Q.suggestPackages(list, state.settings);
+  if (!r.packages.length) {
+    return dialog('無法建議拆包', `<p>已選的 ${list.length} 項全部未達門檻，沒有可打包的工項。</p>
+      <ul style="margin:6px 0 0 18px;padding:0">${r.excluded.map((e) => `<li>${esc(e.name)} — ${esc(e.reason)}</li>`).join('')}</ul>`);
+  }
+  const cards = r.packages.map((p, i) => {
+    const items = p.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean);
+    return `<div class="sugpkg">
+      <input type="checkbox" data-sp="${i}" checked style="width:auto;margin-top:3px">
+      <div class="g">
+        <b>${esc(p.code)}</b> · ${esc(p.name)}
+        <div class="hint">${items.length} 項 · 預估 NT$ ${Q.fmt(p.cost, 0)} · 建議到貨 ${esc(p.needDate)}</div>
+        <div class="hint">${esc(p.reason)}</div>
+        <div class="hint" style="margin-top:3px">${items.map((x) => `${esc(x.name)}(${x.leadTimeDays || 0}天)`).join('、')}</div>
+      </div></div>`;
+  }).join('');
+  const exHtml = r.excluded.length ? `<p class="chip bad" style="display:block;padding:7px 10px;margin-top:10px">
+    ${r.excluded.length} 項未達門檻，不會納入任何包：</p>
+    <ul style="margin:6px 0 0 18px;padding:0">${r.excluded.map((e) => `<li class="hint">${esc(e.name)} — ${esc(e.reason)}</li>`).join('')}</ul>` : '';
+  dialog('自動建議拆包', `
+    <p class="hint">分組原則：<b>前置期分桶 × 供應商</b>。一個包的交期等於包裡最慢那一項，
+    所以前置期差一個量級的東西不同包；長前置（要徑物料）排在最前面，提醒你先發包。</p>
+    ${cards}${exHtml}`,
+    [{ label: '取消' }, {
+      label: '建立勾選的包', primary: true, fn: () => {
+        let n = 0;
+        $$('#dlgBody [data-sp]').forEach((cb) => {
+          if (!cb.checked) return;
+          const p = r.packages[+cb.dataset.sp];
+          state.packages.push({
+            code: p.code, name: p.name, vendor: p.vendor, needDate: p.needDate,
+            itemCodes: p.itemCodes, createdAt: new Date().toISOString(), auto: true, reason: p.reason,
+          });
+          n++;
+        });
+        renderAll();
+        if (n) setTimeout(() => dialog('已建立', `<p>建立 ${n} 個採購包。每包都可以再改名稱、供應商與到貨日。</p>`), 60);
+      },
+    }]);
+}
+
 function suggestPkgName(items) {
   if (!items.length) return '採購包';
   const tops = new Set(items.map((i) => String(i.wbs).split('.')[0]));
@@ -1009,20 +1067,21 @@ function itemRow(it) {
   const p = Q.suggestPurchase(it, state.settings);
   const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
   const v = Q.variance(it.qty.drawing, it.qty.boq);
+  const pay = Q.paymentImpact(it, state.settings);
   return [
     it.wbs, it.code, it.name, it.spec, it.unit,
     it.qty.drawing, it.qty.boq, v ? v.abs : '', v ? (v.pct * 100).toFixed(2) + '%' : '',
     it.qty.manual, p.basis.basis ? Q.SOURCE_META[p.basis.basis].label : '待確認', p.basis.status, p.basis.rule,
     c.score, c.band, it.wasteRate ?? state.settings.defaultWasteRate,
     p.suggestQty, p.orderQty, p.orderUnit, p.deliveredQty, it.unitPrice, p.cost,
-    it.leadTimeDays, it.manualBy, it.manualNote,
+    pay.label, pay.note, it.leadTimeDays, it.manualBy, it.manualNote,
     it.provenance ? (it.provenance.kind === 'dxf-layer' ? `圖層:${it.provenance.layer}@${it.provenance.drawing}` : `量測@${it.provenance.drawing}`) : '',
   ];
 }
 
 const CSV_HEAD = ['WBS', '工項代碼', '名稱', '規格', '單位', '圖面量', 'BOQ量', '差異量', '差異率', '人工確認',
   '正式採購基準', '狀態', '判定規則', '可信度分數', '可信度等級', '損耗率', '建議採購量', '下單量', '訂購單位',
-  '到貨量', '單價', '預估金額', '前置期(天)', '簽核人', '確認理由', '數量出處'];
+  '到貨量', '單價', '預估金額', '計價影響', '計價說明', '前置期(天)', '簽核人', '確認理由', '數量出處'];
 
 function openExport() {
   dialog('匯出', `
