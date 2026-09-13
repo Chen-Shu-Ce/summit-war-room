@@ -133,6 +133,10 @@ export function freezeBaseline(pkg, items, settings, payload = {}) {
       items: snaps,
       totals: { count: snaps.length, cost: Q.roundTo(cost, 2) },
       unpriced: snaps.filter((s) => !Q.isNum(s.cost)).length,
+      // 行情快照必須跟著凍結。否則原料指數天天在動，對照基準版就會天天冒出
+      // 「單價變了」的差異，而其實沒有人改過任何東西 —— 幽靈差異會讓變更管理失去意義。
+      priceBase: payload.priceBase || null,
+      marketAt: payload.priceBase ? payload.priceBase.at : null,
     },
   };
 }

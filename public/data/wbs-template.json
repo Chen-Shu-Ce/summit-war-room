@@ -333,7 +333,15 @@
         "min": 0.02,
         "mode": 0.03,
         "max": 0.08
-      }
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 1.0214,
+          "note": "3C×38mm² × 8.96 g/cm³"
+        }
+      ]
     },
     {
       "code": "321.02",
@@ -368,7 +376,15 @@
         "min": 0.02,
         "mode": 0.03,
         "max": 0.08
-      }
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.5914,
+          "note": "3C×22mm² × 8.96 g/cm³"
+        }
+      ]
     },
     {
       "code": "322.01",
@@ -390,7 +406,7 @@
         "packMultiple": 1,
         "moq": 5
       },
-      "unitPrice": 1900,
+      "unitPrice": 32,
       "leadTimeDays": 21,
       "measureType": "length",
       "drawingSource": "auto",
@@ -401,7 +417,16 @@
         "min": 0.04,
         "mode": 0.08,
         "max": 0.15
-      }
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.0493,
+          "note": "1C×5.5mm² × 8.96 g/cm³"
+        }
+      ],
+      "priceNote": "單價由 1900 修正為 32。絕緣電線 5.5mm²：原填 1,900 應為 100M 整捲價。銅含量 0.0493 kg/M × NT$433.6/kg = NT$21.4/M，單價低於此即不可能 —— 由銅含量檢核抓出。"
     },
     {
       "code": "350.01",
@@ -435,7 +460,15 @@
         "min": 0.03,
         "mode": 0.05,
         "max": 0.12
-      }
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.1971,
+          "note": "1C×22mm² × 8.96 g/cm³"
+        }
+      ]
     },
     {
       "code": "320.01",
@@ -470,7 +503,15 @@
         "min": 0.03,
         "mode": 0.05,
         "max": 0.12
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 3.2,
+          "note": "RSC φ50 熱浸鍍鋅厚管 ≈ 3.2 kg/M"
+        }
+      ]
     },
     {
       "code": "323.01",
@@ -505,7 +546,15 @@
         "min": 0.02,
         "mode": 0.04,
         "max": 0.09
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 16.0,
+          "note": "展開寬 0.85m × t2.0mm × 7.85 + 橫桿約 20%"
+        }
+      ]
     },
     {
       "code": "310.01",
@@ -538,7 +587,21 @@
       "layerMapped": true,
       "coverage": "full",
       "special": true,
-      "specialNote": "非標準盤體尺寸，需依現場機房淨空客製，交期 120 天為要徑"
+      "specialNote": "非標準盤體尺寸，需依現場機房淨空客製，交期 120 天為要徑",
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "estimate",
+          "kg": 100,
+          "note": "800A 銅匯流排與分歧概估 100 kg"
+        },
+        {
+          "index": "steel",
+          "grade": "estimate",
+          "kg": 250,
+          "note": "IP54 鋼製盤體概估 250 kg"
+        }
+      ]
     },
     {
       "code": "331.01",
@@ -646,7 +709,7 @@
         "packMultiple": 1,
         "moq": 5
       },
-      "unitPrice": 4200,
+      "unitPrice": 45,
       "leadTimeDays": 25,
       "measureType": "length",
       "drawingSource": "auto",
@@ -657,7 +720,16 @@
         "min": 0.05,
         "mode": 0.08,
         "max": 0.18
-      }
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.0185,
+          "note": "4P×23AWG(0.258mm²)×8 芯 × 8.96 g/cm³"
+        }
+      ],
+      "priceNote": "單價由 4200 修正為 45。Cat.6A 網路線：原填 4,200 應為 305M 整箱價。銅含量 0.0185 kg/M × NT$433.6/kg = NT$8.0/M。"
     },
     {
       "code": "720.01",
@@ -721,7 +793,14 @@
         "min": 0.03,
         "mode": 0.05,
         "max": 0.12
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS304 含鎳約 8%，價格由鎳與鉻主導，與鋼筋盤元脫鉤。行情表無鎳指數。"
+        }
+      ]
     },
     {
       "code": "420.01",
@@ -755,7 +834,15 @@
         "min": 0.04,
         "mode": 0.06,
         "max": 0.14
-      }
+      },
+      "priceLink": [
+        {
+          "index": "pp",
+          "grade": "proxy",
+          "kg": 2.4,
+          "note": "PVC-A φ100 ≈ 2.4 kg/M。PP 指數代理 PVC 樹脂，原料不同，僅弱相關"
+        }
+      ]
     },
     {
       "code": "450.01",
@@ -813,7 +900,14 @@
       "layerMapped": true,
       "coverage": "full",
       "special": true,
-      "specialNote": "SUS316 非標準庫存料，需訂製捲板，交期受鋼廠排程影響"
+      "specialNote": "SUS316 非標準庫存料，需訂製捲板，交期受鋼廠排程影響",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS316 另含鉬約 2%，較 304 更貴且走勢不同。行情表無鎳／鉬指數。"
+        }
+      ]
     },
     {
       "code": "510.01",
@@ -848,7 +942,15 @@
         "min": 0.03,
         "mode": 0.05,
         "max": 0.12
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 16.07,
+          "note": "黑鐵管 φ100 Sch40 = 16.07 kg/M（CNS 管重表）"
+        }
+      ]
     },
     {
       "code": "520.01",
@@ -941,7 +1043,15 @@
         "min": 0.03,
         "mode": 0.05,
         "max": 0.11
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 20.2,
+          "note": "SGP 150A = 20.2 kg/M（JIS G3452）"
+        }
+      ]
     },
     {
       "code": "630.01",
@@ -976,7 +1086,15 @@
         "min": 0.08,
         "mode": 0.12,
         "max": 0.22
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 7.85,
+          "note": "t0.8mm × 7850 = 6.28 kg/M² + 法蘭吊架約 25%"
+        }
+      ]
     },
     {
       "code": "610.01",
@@ -1005,7 +1123,27 @@
       "layerMapped": false,
       "coverage": "none",
       "special": true,
-      "specialNote": "進口機組，180 天交期為全案最長要徑，須最優先發包"
+      "specialNote": "進口機組，180 天交期為全案最長要徑，須最優先發包",
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "estimate",
+          "kg": 1000,
+          "note": "250RT 氣冷式冷凝器與蒸發器銅管概估 1,000 kg"
+        },
+        {
+          "index": "aluminium",
+          "grade": "estimate",
+          "kg": 300,
+          "note": "冷凝器鋁鰭片概估 300 kg"
+        },
+        {
+          "index": "steel",
+          "grade": "estimate",
+          "kg": 1500,
+          "note": "機殼、框架、壓縮機鋼件概估 1,500 kg"
+        }
+      ]
     },
     {
       "code": "130.01",
@@ -1108,7 +1246,15 @@
         "min": 0.02,
         "mode": 0.04,
         "max": 0.09
-      }
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "direct",
+          "kg": 1,
+          "note": "指數標的本身，每公斤用量為 1"
+        }
+      ]
     },
     {
       "code": "210.01",
@@ -1207,7 +1353,15 @@
       "drawingSource": "auto",
       "closed": true,
       "layerMapped": true,
-      "coverage": "full"
+      "coverage": "full",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 45,
+          "note": "甲種防火門 900×2100 門扇+門框鋼板約 45 kg"
+        }
+      ]
     },
     {
       "code": "810.01",
@@ -1233,7 +1387,14 @@
       "leadTimeDays": 40,
       "measureType": "count",
       "layerMapped": false,
-      "coverage": "none"
+      "coverage": "none",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS304 板金件，同上。"
+        }
+      ]
     },
     {
       "code": "910.01",

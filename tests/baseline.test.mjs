@@ -213,3 +213,20 @@ test('ERP 匯出：欄位名稱可對映成對方 ERP 的欄名', () => {
   assert.equal(files[0].rows[0][2], 'APPLY_USER');
   assert.ok(files[1].rows[0].includes('ITEM_NO') && files[1].rows[0].includes('QTY'));
 });
+
+test('凍結基準版會一併凍結行情快照（否則會冒出幽靈差異）', () => {
+  const items = [{ code: 'A', name: 'X', wbs: '1', unit: 'M', unitPrice: 100, qty: { drawing: 10, boq: 10 }, order: { unit: 'M', unitFactor: 1, packMultiple: 1, moq: 0 } }];
+  const snap = { at: '2026-09-13T00:00:00Z', idx: { copper: { twdPerKg: 433.6 } }, fx: 31.65 };
+  const r = B.freezeBaseline({ code: 'PKG-001', name: 'p' }, items, SETTINGS,
+    { confirmedBy: '王工程師', priceBase: snap });
+  assert.equal(r.error, undefined);
+  assert.equal(r.baseline.marketAt, '2026-09-13T00:00:00Z');
+  assert.equal(r.baseline.priceBase.idx.copper.twdPerKg, 433.6);
+});
+
+test('沒有行情快照時基準版明白留 null，不填假值', () => {
+  const items = [{ code: 'A', name: 'X', wbs: '1', unit: 'M', unitPrice: 100, qty: { drawing: 10, boq: 10 }, order: { unit: 'M', unitFactor: 1, packMultiple: 1, moq: 0 } }];
+  const r = B.freezeBaseline({ code: 'PKG-001', name: 'p' }, items, SETTINGS, { confirmedBy: '王工程師' });
+  assert.equal(r.baseline.priceBase, null);
+  assert.equal(r.baseline.marketAt, null);
+});

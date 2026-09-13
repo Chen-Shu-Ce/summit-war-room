@@ -201,6 +201,18 @@ table.seq td.mono{font-family:var(--mono)}
 .feas{border:1px solid var(--warn);background:var(--warn-bg);border-radius:8px;padding:10px 12px;margin-bottom:11px;line-height:1.65;font-size:13px}
 .feas.bad{border-color:var(--bad);background:var(--bad-bg)}
 .feas .btn{margin-left:6px;vertical-align:baseline}
+table.mkt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.mkt th,table.mkt td{padding:5px 8px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
+table.mkt td.n,table.mkt th.n{text-align:right;font-family:var(--mono)}
+table.mkt tr.none td{opacity:.72}
+.gbar{display:flex;height:14px;border-radius:4px;overflow:hidden;margin:8px 0 4px;background:var(--line2)}
+.gbar i{display:block;height:100%}
+.gkey{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;align-items:center}
+.gkey span{display:flex;gap:5px;align-items:center}
+.gkey i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.cu{background:#c2703d} .al{background:#8aa0b4} .st{background:#6b7280} .ppc{background:#7c8f5a}
+.unc{background:repeating-linear-gradient(45deg,var(--bad) 0 5px,transparent 5px 10px);border:1px solid var(--bad)}
+.fix{background:var(--line2)}
 .rfi.done{opacity:.62}
 .rfi .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
 .rfi .meta{font-size:11px;color:var(--ink3);margin-top:4px}
@@ -429,6 +441,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
       <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
         <button class="btn primary" id="btnToPkg">轉採購 Package</button>
         <button class="btn" id="btnSim">風險模擬</button>
+        <button class="btn" id="btnMarket">行情連動</button>
         <button class="btn" id="btnAutoPkg">自動建議拆包</button>
         <button class="btn" id="btnClearCart">清空</button>
       </div>

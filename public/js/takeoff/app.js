@@ -12,6 +12,7 @@ import * as A from './analysis.js';
 import * as B from './baseline.js';
 import * as R from './risk.js';
 import * as S from './sequence.js';
+import * as PR from './pricing.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -48,6 +49,9 @@ const state = {
   seqStart: '',        // 專案開工日
   seqView: 'tree',
   sched: null,         // 最近一次排程結果
+  market: null,        // /api/market-data 的行情
+  marketErr: null,
+  priceBase: null,     // 價格基準快照（凍結後才會有調整額）
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -71,6 +75,45 @@ async function init() {
   state.viewer = new Viewer($('#cv'));
   bindViewer(state.viewer);
   renderAll();
+  // 行情是加值資訊，不是必要條件 —— 抓不到也不能擋住算量。
+  loadMarket().then(renderAll).catch(() => {});
+}
+
+/**
+ * 讀行情。先打 /api/market-data（有 Redis 時是每月更新的值），
+ * 失敗就退回隨附的 market-seed.json，並明白標示這是離線種子資料。
+ */
+async function loadMarket() {
+  const tries = [
+    { url: '/api/market-data', live: true },
+    { url: './data/market-seed.json', live: false },
+  ];
+  for (const t of tries) {
+    try {
+      const r = await fetch(t.url, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || !Array.isArray(j.items)) continue;
+      state.market = { ...j, _live: t.live, _url: t.url };
+      state.marketErr = null;
+      return state.market;
+    } catch (e) { state.marketErr = String(e && e.message || e); }
+  }
+  state.marketErr = state.marketErr || '行情來源都讀不到';
+  return null;
+}
+
+/** 目前行情快照。沒有行情就回 null —— 不用假資料撐場面。 */
+function marketSnap() { return state.market ? PR.snapshotIndices(state.market) : null; }
+
+/** 把價格基準日套進工項。沒有基準的工項連動額一律為 0。 */
+function withBase(it) { return state.priceBase ? { ...it, priceBase: state.priceBase } : it; }
+
+/** 連動後單價。沒有行情或沒有基準就回原單價。 */
+function livePrice(it) {
+  const snap = marketSnap();
+  if (!snap) return { price: it.unitPrice ?? null, linked: false, reason: 'no-market', delta: 0, deltaPct: 0, parts: [] };
+  return PR.linkedPrice(withBase(it), snap);
 }
 
 function buildModel(tpl) {
@@ -109,7 +152,7 @@ function persist() {
       selected: [...state.selected], packages: state.packages, settings: state.settings,
       projName: state.projName, scope: state.scope, rfiLog: state.rfiLog,
       baselines: state.baselines, prs: state.prs,
-      tasks: state.tasks, seqStart: state.seqStart,
+      tasks: state.tasks, seqStart: state.seqStart, priceBase: state.priceBase,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -141,6 +184,7 @@ function restore() {
     state.prs = d.prs || [];
     state.tasks = d.tasks || [];
     state.seqStart = d.seqStart || '';
+    state.priceBase = d.priceBase || null;
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -285,9 +329,18 @@ function selectedItems() { return state.items.filter((i) => state.selected.has(i
  * 採購計算前的單一入口：把工項的損耗率換成「該服務水準下的分位數」。
  * 關掉機率模式就原封不動回傳 —— quantity.js 完全不需要知道機率的存在。
  */
+/**
+ * 單一入口：套用服務水準（數量）與行情連動（單價）。
+ * 所有下游 —— 金額合計、採購包、基準版、請購單、CSV —— 都走這裡，
+ * 才不會出現「畫面上是連動價、匯出的是基準價」這種對不起來的情形。
+ */
 function priced(it) {
-  if (!state.settings.stochastic) return it;
-  return R.withServiceLevel(it, state.settings, it.serviceLevel);
+  let out = state.settings.stochastic ? R.withServiceLevel(it, state.settings, it.serviceLevel) : it;
+  if (state.settings.priceLink !== false) {
+    const lp = livePrice(it);
+    if (lp.linked && Q.isNum(lp.price)) out = { ...out, unitPrice: lp.price, basePrice: it.unitPrice, priceDelta: lp.delta };
+  }
+  return out;
 }
 function pricedAll(list) { return list.map(priced); }
 
@@ -335,7 +388,24 @@ function renderCart() {
     <div class="totrow"><span>可信度分布</span><b>
       <span class="chip bandA">A ${s.bands.A}</span> <span class="chip bandB">B ${s.bands.B}</span>
       <span class="chip bandC">C ${s.bands.C}</span> <span class="chip bandD">D ${s.bands.D}</span></b></div>
-    <div class="totrow"><span>需複核 / 鎖定</span><b>${s.review} / ${s.blocked}</b></div>`;
+    <div class="totrow"><span>需複核 / 鎖定</span><b>${s.review} / ${s.blocked}</b></div>
+    ${marketTotRow(list, s)}`;
+}
+
+/** 摘要列的行情連動狀態。沒有基準日就明說，不假裝在跑即時行情。 */
+function marketTotRow(list, s) {
+  if (!state.market) return '<div class="totrow"><span>行情連動</span><b class="hint">未載入行情</b></div>';
+  if (!list.length) return '';
+  if (!state.priceBase) return '<div class="totrow"><span>行情連動</span><b><span class="chip warn">未設基準日</span></b></div>';
+  const base = list.reduce((a, it) => {
+    const p = state.settings.stochastic ? R.withServiceLevel(it, state.settings, it.serviceLevel) : it;
+    const q = Q.suggestPurchase(p, state.settings);
+    return a + (Q.isNum(it.unitPrice) ? q.suggestQty * it.unitPrice : 0);
+  }, 0);
+  const d = s.cost - base;
+  const pct = base > 0 ? (d / base) * 100 : 0;
+  return `<div class="totrow"><span>其中原料連動</span><b>
+    <span class="chip ${d > 0.5 ? 'bad' : d < -0.5 ? 'ok' : ''}">${d >= 0 ? '+' : '−'}NT$ ${Q.fmt(Math.abs(d), 0)}　${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span></b></div>`;
 }
 
 function renderPkgs() {
@@ -444,6 +514,7 @@ function wire() {
   $('#btnToPkg').onclick = toPackage;
   $('#btnAutoPkg').onclick = autoPackage;
   $('#btnSim').onclick = openPortfolioSim;
+  $('#btnMarket').onclick = openMarket;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -1274,6 +1345,201 @@ function openDistDialog(code) {
     });
 }
 
+/* ══════════ 行情連動 ══════════ */
+
+const IDX_CLASS = { copper: 'cu', aluminium: 'al', steel: 'st', pp: 'ppc' };
+
+function openMarket() {
+  const snap = marketSnap();
+  if (!snap) {
+    return dialog('行情連動', `<p class="chip bad" style="display:block;padding:9px 11px">讀不到行情資料。${esc(state.marketErr || '')}</p>
+      <p class="hint">行情是加值資訊，不是必要條件 —— 算量與採購流程不受影響，只是單價不會隨原料浮動。</p>`,
+      [{ label: '重試', primary: true, fn: () => loadMarket().then(() => { renderAll(); openMarket(); }) }, { label: '關閉' }]);
+  }
+  const list = selectedItems();
+  // 被閘門鎖住的工項還沒有採購量，因此算不出曝險金額 —— 但它們的曝險是「還沒量到」，不是「沒有」。
+  // 讓它們從這張表悄悄消失，就會低估整體曝險，那正是這個模組最不該犯的錯。
+  const pending = [];
+  const rows = [];
+  for (const it of list) {
+    const p = priced(it);
+    const sp = Q.suggestPurchase(p, state.settings);
+    if (!Q.isNum(sp.suggestQty) || sp.suggestQty <= 0) {
+      pending.push({ code: it.code, name: it.name, status: sp.status || Q.resolveBasis(it, state.settings).status, unitPrice: it.unitPrice });
+      continue;
+    }
+    rows.push(PR.exposure(withBase(it), sp.suggestQty, snap));
+  }
+  const port = PR.portfolioExposure(rows);
+  const sens = PR.sensitivity(rows, [-0.1, -0.05, 0.05, 0.1]);
+  const live = state.market._live;
+  const fxRow = (state.market.items || []).find((x) => x.id === 'fx');
+  const fxLive = state.market.fxSource && !String(state.market.fxSource).startsWith('manual-fallback');
+
+  dialog('行情連動', `
+    ${marketHonesty(live, fxLive)}
+    ${marketIndexTable(snap)}
+    ${marketBaseBlock(snap)}
+    ${list.length ? marketItemTable(rows, snap) + marketPending(pending) + marketExposure(port) + marketSensitivity(sens, port) + marketLockWindows(list)
+      : '<p class="hint" style="margin-top:12px">尚未選取工項。選好之後這裡會列出每一項的連動後單價、原料曝險分布與鎖價窗口。</p>'}
+  `, [
+    { label: state.priceBase ? '重設價格基準日' : '凍結為價格基準日', primary: true, fn: freezePriceBase },
+    { label: '關閉' },
+  ]);
+}
+
+/** 這張表有多少是真的即時，必須先講清楚。 */
+function marketHonesty(live, fxLive) {
+  const m = state.market;
+  return `<div class="feas" style="border-color:var(--line);background:var(--card2)">
+    <b>這張行情表有多少是即時的：</b>
+    <table class="mkt" style="margin:7px 0">
+      <tbody>
+        <tr><td>匯率 USD/TWD</td><td>${fxLive ? '<span class="chip ok">每月自 API 抓取</span>' : '<span class="chip warn">備援固定值</span>'}</td>
+            <td class="hint">${esc(m.fxSource || '—')}</td></tr>
+        <tr><td>銅／鋁／鋼／塑膠粒</td><td><span class="chip warn">人工維護的月更資料</span></td>
+            <td class="hint">來源 ${esc(m._url)}${live ? '' : '（離線種子檔）'}</td></tr>
+      </tbody>
+    </table>
+    只有匯率是真正自動抓的。銅鋁鋼 PP 來自每月人工維護的 <code>market-source.json</code> ——
+    <b>它們會影響金額，所以過期的代價是實質的</b>。要真正即時，需接 LME／中鋼／台塑的授權資料源。
+    <div class="hint" style="margin-top:5px">最近更新：${esc(m.updatedAt || '—')}${m.sourceUpdatedAt ? `　來源時點：${esc(m.sourceUpdatedAt)}` : ''}</div>
+  </div>`;
+}
+
+function marketIndexTable(snap) {
+  const rows = PR.LINKABLE.map((id) => {
+    const meta = PR.INDEX_META[id];
+    const v = snap.idx[id];
+    if (!v) return `<tr class="none"><td>${esc(meta.label)}</td><td colspan="4" class="hint">取不到值</td></tr>`;
+    const raw = (state.market.items || []).find((x) => x.id === id) || {};
+    const ch = Q.isNum(raw.changePct) ? raw.changePct : null;
+    return `<tr><td><span class="gkey"><i class="${IDX_CLASS[id]}"></i>${esc(meta.label)}</span>
+        <div class="hint">${esc(meta.src)}</div></td>
+      <td class="n">${v.ccy === 'USD' ? 'US$' : 'NT$'} ${Q.fmt(v.quoted, 0)}<div class="hint">/ 公噸</div></td>
+      <td class="n">${v.ccy === 'USD' ? `× ${Q.fmt(v.fx, 2)}` : '<span class="hint">台幣報價</span>'}</td>
+      <td class="n"><b>NT$ ${Q.fmt(v.twdPerKg, 2)}</b><div class="hint">/ 公斤</div></td>
+      <td class="n">${ch == null ? '—' : `<span class="chip ${ch > 0 ? 'bad' : ch < 0 ? 'ok' : ''}">${ch > 0 ? '+' : ''}${ch}%</span>`}</td></tr>`;
+  }).join('');
+  return `<h4 style="margin:13px 0 6px">指數（一律換算為台幣／公斤）</h4>
+    <table class="mkt"><thead><tr><th>指數</th><th class="n">原始報價</th><th class="n">匯率</th><th class="n">台幣單價</th><th class="n">月變動</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p class="hint" style="margin-top:5px">銅、鋁、塑膠粒報美元，鋼報台幣。<b>漏掉匯率換算，台幣貶值造成的成本上升就會憑空消失</b> ——
+    銅漲 10% 而台幣貶 5%，台幣成本是漲 15.5%，不是 10%。</p>`;
+}
+
+function marketBaseBlock(snap) {
+  if (!state.priceBase) {
+    return `<div class="feas" style="margin-top:12px"><b>尚未設定價格基準日，所有連動額為 0。</b><br>
+      ${PR.LINK_REASON['no-base']}<br>
+      <div class="hint" style="margin-top:5px">很多工具在這裡靜默地拿今天的行情同時當基準與現值，調整額必然是 0，
+      然後宣稱自己在跑即時行情。那不是「沒有波動」，是「沒有基準」。按下方「凍結為價格基準日」才會開始計算。</div></div>`;
+  }
+  const b = state.priceBase;
+  const cmp = PR.LINKABLE.filter((id) => b.idx[id] && snap.idx[id]).map((id) => {
+    const r = snap.idx[id].twdPerKg / b.idx[id].twdPerKg - 1;
+    return `<tr><td>${esc(PR.INDEX_META[id].label)}</td>
+      <td class="n">${Q.fmt(b.idx[id].twdPerKg, 2)}</td><td class="n">${Q.fmt(snap.idx[id].twdPerKg, 2)}</td>
+      <td class="n"><span class="chip ${r > 0.001 ? 'bad' : r < -0.001 ? 'ok' : ''}">${r >= 0 ? '+' : ''}${(r * 100).toFixed(1)}%</span></td></tr>`;
+  }).join('');
+  return `<h4 style="margin:13px 0 6px">價格基準日　<span class="chip ok">${esc(String(b.at).slice(0, 10))}</span></h4>
+    <table class="mkt"><thead><tr><th>指數</th><th class="n">基準</th><th class="n">現值</th><th class="n">變動</th></tr></thead><tbody>${cmp}</tbody></table>`;
+}
+
+function marketItemTable(rows, snap) {
+  const body = rows.map((r) => {
+    const it = state.itemByCode.get(r.itemCode);
+    const lp = PR.linkedPrice(withBase(it), snap);
+    const v = PR.validateLink(withBase(it), snap);
+    const links = (it.priceLink || []);
+    const grades = links.map((l) => {
+      const g = PR.LINK_GRADE[l.grade || 'proxy'];
+      return `<span class="chip ${g.level === 'ok' ? 'ok' : g.level === 'bad' ? 'bad' : 'warn'}" title="${esc(g.note)}">${esc(PR.INDEX_META[l.index] ? PR.INDEX_META[l.index].label : l.index)} ${esc(g.label)}</span>`;
+    }).join(' ');
+    const parts = lp.parts.map((p) => `${esc(p.label)} ${(p.share * 100).toFixed(0)}%${p.kg != null ? `（${p.kg} kg/${esc(it.unit)}）` : ''}`).join('、');
+    return `<tr class="${r.uncovered ? 'none' : ''}">
+      <td>${esc(it.name)}<div class="hint">${esc(it.code)}　${grades || '<span class="chip">未設定連動</span>'}</div></td>
+      <td class="n">${Q.fmt(r.qty, 1)} ${esc(it.unit)}</td>
+      <td class="n">${Q.fmt(r.basePrice, 2)}</td>
+      <td class="n">${lp.linked ? `<b>${Q.fmt(lp.price, 2)}</b>` : '<span class="hint">同左</span>'}</td>
+      <td class="n">${lp.linked ? `<span class="chip ${lp.deltaPct > 0.05 ? 'bad' : lp.deltaPct < -0.05 ? 'ok' : ''}">${lp.deltaPct >= 0 ? '+' : ''}${lp.deltaPct.toFixed(2)}%</span>` : '—'}</td>
+      <td class="n">${Q.fmt(r.amount, 0)}</td>
+      <td>${parts ? `<span class="hint">${esc(parts)}</span>` : (r.uncovered ? '<span class="chip bad">無指數</span>' : '<span class="hint">—</span>')}</td>
+    </tr>${v.errs.filter((e) => e.level !== 'info').map((e) => `<tr><td colspan="7"><span class="chip ${e.level === 'bad' ? 'bad' : 'warn'}">${esc(e.msg)}</span></td></tr>`).join('')}`;
+  }).join('');
+  return `<h4 style="margin:14px 0 6px">已選工項的連動</h4>
+    <table class="mkt"><thead><tr><th>工項</th><th class="n">建議採購量</th><th class="n">基準單價</th><th class="n">連動後</th><th class="n">變動</th><th class="n">金額</th><th>原料組成</th></tr></thead>
+    <tbody>${body}</tbody></table>`;
+}
+
+/** 還沒定量的工項。曝險是「還沒量到」，不是「沒有」—— 必須被看見。 */
+function marketPending(pending) {
+  if (!pending.length) return '';
+  return `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:10px">
+    <b>${pending.length} 項因為數量尚未定案，曝險未計入下方統計。</b>
+    ${pending.map((p) => `${esc(p.name)}（${esc(p.code)}${p.status === 'blocked' ? '，差異超標鎖定中' : ''}）`).join('、')}
+    —— 這些項目的原料曝險是「還沒量到」，不是「沒有」。數量確認後這張表的金額會往上走。</p>`;
+}
+
+function marketExposure(port) {
+  if (port.amount <= 0) return '';
+  const seg = port.by.map((b) => `<i class="${IDX_CLASS[b.id] || 'fix'}" style="width:${(b.amount / port.amount * 100).toFixed(2)}%"></i>`).join('')
+    + (port.uncovered > 0 ? `<i class="unc" style="width:${(port.uncovered / port.amount * 100).toFixed(2)}%"></i>` : '')
+    + `<i class="fix" style="width:${(Math.max(0, port.fixed) / port.amount * 100).toFixed(2)}%"></i>`;
+  const keys = port.by.map((b) => `<span><i class="${IDX_CLASS[b.id] || 'fix'}"></i>${esc(b.label)} NT$ ${Q.fmt(b.amount, 0)}（${b.pct.toFixed(1)}%）</span>`).join('')
+    + (port.uncovered > 0 ? `<span><i class="unc"></i>量不出來 NT$ ${Q.fmt(port.uncovered, 0)}（${port.uncoveredPct.toFixed(1)}%）</span>` : '')
+    + `<span><i class="fix"></i>加工／運費／毛利 NT$ ${Q.fmt(Math.max(0, port.fixed), 0)}</span>`;
+  return `<h4 style="margin:14px 0 6px">原料曝險分布　<span class="hint" style="font-weight:400">總額 NT$ ${Q.fmt(port.amount, 0)}</span></h4>
+    <div class="gbar">${seg}</div><div class="gkey">${keys}</div>
+    ${port.uncovered > 0 ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:9px">
+      <b>NT$ ${Q.fmt(port.uncovered, 0)}（${port.uncoveredPct.toFixed(1)}%）的原料曝險這張表量不出來。</b>
+      ${port.uncoveredRows.slice(0, 4).map((r) => esc(r.name)).join('、')}${port.uncoveredRows.length > 4 ? ` 等 ${port.uncoveredRows.length} 項` : ''}
+      —— 不鏽鋼的價格由鎳與鉻主導，行情表沒有鎳指數。把這些金額算進「固定」會讓總曝險被低估，而低估比高估危險，所以單獨列出。</p>` : ''}`;
+}
+
+function marketSensitivity(sens, port) {
+  if (!sens.length) return '';
+  const head = [-10, -5, 5, 10].map((p) => `<th class="n">${p > 0 ? '+' : ''}${p}%</th>`).join('');
+  const body = sens.map((r) => `<tr><td>${esc(r.label)}</td><td class="n">${Q.fmt(r.exposure, 0)}</td>
+    ${r.cells.map((c) => `<td class="n"><span class="chip ${c.delta > 0 ? 'bad' : 'ok'}">${c.delta >= 0 ? '+' : '−'}${Q.fmt(Math.abs(c.delta), 0)}</span></td>`).join('')}</tr>`).join('');
+  const worst = sens.reduce((a, r) => a + r.exposure * 0.1, 0);
+  return `<h4 style="margin:14px 0 6px">敏感度（情境，不是預測）</h4>
+    <table class="mkt"><thead><tr><th>指數</th><th class="n">曝險金額</th>${head}</tr></thead><tbody>${body}</tbody></table>
+    <p class="hint" style="margin-top:6px">沒有人知道銅價下個月往哪走 —— 這張表也沒有在猜。它回答的是
+    <b>「往上走 10% 我要多付多少」</b>：全部指數同時 +10%，這批採購多付 <b>NT$ ${Q.fmt(worst, 0)}</b>
+    （佔總額 ${port.amount > 0 ? (worst / port.amount * 100).toFixed(1) : '0'}%）。這個數字可以拿去談鎖價、談調整條款上限。</p>`;
+}
+
+function marketLockWindows(list) {
+  if (!state.sched) return `<p class="hint" style="margin-top:12px">尚未排施工工序，因此算不出鎖價窗口。
+    載入工序後這裡會列出每一項「還剩幾天可以談價」—— 發包當天價格就定了，在那之後行情怎麼走都與這批無關。</p>`;
+  const chains = S.materialChains(state.sched.tasks, state.items, { ...seqOpts(), today: new Date() });
+  const codes = new Set(list.map((i) => i.code));
+  const wins = chains.filter((c) => codes.has(c.itemCode)).map((c) => PR.lockWindow(c)).filter(Boolean)
+    .sort((a, b) => a.days - b.days);
+  if (!wins.length) return '';
+  const badge = { passed: '<span class="chip bad">已過</span>', closing: '<span class="chip warn">即將關閉</span>', open: '<span class="chip ok">開著</span>' };
+  return `<h4 style="margin:14px 0 6px">鎖價窗口</h4>
+    <table class="mkt"><thead><tr><th>工項</th><th class="n">建議發包日</th><th class="n">還剩</th><th>狀態</th></tr></thead>
+    <tbody>${wins.slice(0, 12).map((w) => {
+      const it = state.itemByCode.get(w.itemCode);
+      return `<tr><td>${esc(it ? it.name : w.itemCode)}</td><td class="n">${esc(w.poBy)}</td>
+        <td class="n">${w.days} 天</td><td>${badge[w.state]}</td></tr>`;
+    }).join('')}</tbody></table>
+    <p class="hint" style="margin-top:6px">窗口關閉＝發包＝價格定案。「要不要現在鎖價」這個問題，只有在窗口還開著時才存在。</p>`;
+}
+
+function freezePriceBase() {
+  const snap = marketSnap();
+  if (!snap) return;
+  state.priceBase = snap;
+  persist();
+  renderAll();
+  dialog('價格基準日已設定', `<p>基準時點：<b>${esc(String(snap.at).slice(0, 10))}</b></p>
+    <p class="hint">從現在起，單價會依各工項的原料佔比隨行情浮動；不隨行情的部分（加工、運費、毛利）維持不變。
+    凍結基準版（Baseline）時會連同這份行情快照一起存 —— 否則行情每天在動，對照基準版就會天天冒出沒有人改過的幽靈差異。</p>`);
+}
+
 function openPortfolioSim() {
   const list = selectedItems();
   if (!list.length) return dialog('沒有已選工項', '<p>請先勾選要模擬的工項。</p>');
@@ -1413,11 +1679,15 @@ function openFreeze(pkgIdx) {
         const r = B.freezeBaseline(pkg, items, state.settings, {
           confirmedBy: $('#bBy').value, note: $('#bNote').value,
           previous: prev, existing: state.baselines,
+          priceBase: state.priceBase || marketSnap(),
         });
         if (r.error) return setTimeout(() => dialog('無法凍結', `<p>${esc(r.error)}</p>`), 40);
         state.baselines.push(r.baseline);
         renderAll();
-        setTimeout(() => dialog('已凍結', `<p>${esc(r.baseline.code)}（rev ${r.baseline.rev}）已建立，可由它產生請購單。</p>`), 40);
+        setTimeout(() => dialog('已凍結', `<p>${esc(r.baseline.code)}（rev ${r.baseline.rev}）已建立，可由它產生請購單。</p>
+          ${r.baseline.marketAt ? `<p class="hint">行情快照 ${esc(String(r.baseline.marketAt).slice(0, 10))} 已一併凍結 ——
+          之後行情再怎麼動，對照這一版都不會冒出沒有人改過的幽靈差異。</p>`
+          : '<p class="chip warn" style="display:block;padding:7px 10px">沒有行情快照可凍結。日後若啟用行情連動，對照這一版會出現無法歸因的單價差異。</p>'}`), 40);
       },
     }]);
 }
@@ -1995,6 +2265,7 @@ async function importProject(file) {
     state.baselines = d.baselines || state.baselines;
     state.prs = d.prs || state.prs;
     state.tasks = d.tasks || state.tasks;
+    state.priceBase = d.priceBase || state.priceBase;
     renderAll();
     dialog('匯入完成', `<p>已載入 ${d.items.length} 筆工項狀態。</p>`);
   } catch (e) { dialog('匯入失敗', `<p>${esc(e.message)}</p>`); }
@@ -2528,4 +2799,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, runAnalysis, renderAll, runSchedule };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, runAnalysis, renderAll, runSchedule, loadMarket };

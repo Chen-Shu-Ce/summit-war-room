@@ -33,7 +33,14 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1500, height: 940 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
-page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+page.on('console', (m) => {
+  if (m.type() !== 'error') return;
+  // /api/market-data 是可選的加值端點：靜態測試伺服器上不存在，程式已處理並退回種子檔。
+  // 瀏覽器仍會把失敗的 fetch 記到 console，那不是未捕捉錯誤。其餘一律計入。
+  const loc = (m.location && m.location().url) || '';
+  if (loc.includes('/api/market-data') && /404|Failed to load resource/.test(m.text())) return;
+  errors.push('console: ' + m.text());
+});
 
 await page.goto(base + '/takeoff.html');
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
@@ -626,6 +633,101 @@ ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seq
 ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
 await page.waitForTimeout(400);
 
+console.log('\n【7之二】原料行情連動');
+await page.locator('#tabList').click();
+await page.evaluate(() => {
+  const st = window.__takeoff.state;
+  st.selected = new Set(['321.01', '140.01', '410.01', '810.01', '610.01']);
+  window.__takeoff.renderAll();
+});
+await page.waitForTimeout(250);
+const susQty = await page.evaluate(() => {
+  const { state, Q } = window.__takeoff;
+  return ['410.01', '460.01', '810.01'].map((c) => {
+    const it = state.itemByCode.get(c);
+    const p = Q.suggestPurchase(it, state.settings);
+    return { code: c, qty: p.suggestQty, status: p.status || Q.resolveBasis(it, state.settings).status };
+  });
+});
+ok('410.01 因差異超標被鎖定、810.01 可用 —— 兩種情形都要被看見',
+  susQty[0].qty == null && susQty[2].qty > 0, JSON.stringify(susQty));
+ok('行情已載入（API 失敗時退回種子檔）', await page.evaluate(() => !!window.__takeoff.state.market));
+
+await page.locator('#btnMarket').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+let mkTxt = await page.locator('#dlgBody').innerText();
+ok('明說只有匯率是真正自動抓的', mkTxt.includes('只有匯率是真正自動抓的'), '');
+ok('未設基準日時明說調整額為 0', mkTxt.includes('尚未設定價格基準日'), '');
+ok('指數一律換算為台幣／公斤', mkTxt.includes('台幣／公斤'));
+ok('不鏽鋼標示為無指數而非硬接鋼價', mkTxt.includes('無指數'));
+
+// 凍結價格基準日
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(300);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+ok('可凍結價格基準日', await page.evaluate(() => !!window.__takeoff.state.priceBase));
+
+// 模擬銅漲 20% + 台幣貶 5%，驗證複合而非相加
+const linked = await page.evaluate(() => {
+  const { state, PR, renderAll } = window.__takeoff;
+  const m = state.market;
+  m.items.find((x) => x.id === 'copper').price *= 1.2;
+  m.items.find((x) => x.id === 'fx').price *= 1.05;
+  renderAll();
+  const snap = PR.snapshotIndices(m);
+  const it = { ...state.itemByCode.get('321.01'), priceBase: state.priceBase };
+  const lp = PR.linkedPrice(it, snap);
+  const sus = { ...state.itemByCode.get('410.01'), priceBase: state.priceBase };
+  return {
+    idxRatio: PR.indexAt(snap, 'copper') / PR.indexAt(state.priceBase, 'copper'),
+    share: lp.parts[0] && lp.parts[0].share,
+    deltaPct: lp.deltaPct, price: lp.price, base: lp.basePrice,
+    susLinked: PR.linkedPrice(sus, snap).linked,
+  };
+});
+ok('美元指數乘匯率：銅 +20% × 台幣貶 5% = +26%', Math.abs(linked.idxRatio - 1.26) < 1e-9, String(linked.idxRatio));
+ok('單價漲幅 = 原料佔比 × 指數漲幅，不等於指數漲幅',
+  Math.abs(linked.deltaPct - linked.share * 26) < 1e-6 && linked.deltaPct < 26,
+  `${linked.deltaPct.toFixed(2)}% vs 指數 26%`);
+ok('連動後單價高於基準單價', linked.price > linked.base, `${linked.base} → ${linked.price.toFixed(2)}`);
+ok('不鏽鋼不參與連動（行情表無鎳指數）', linked.susLinked === false);
+
+await page.locator('#btnMarket').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+mkTxt = await page.locator('#dlgBody').innerText();
+ok('設基準日後顯示基準 vs 現值', mkTxt.includes('價格基準日') && !mkTxt.includes('尚未設定價格基準日'));
+ok('列出原料曝險分布', mkTxt.includes('原料曝險分布'));
+ok('單獨列出量不出來的曝險（不鏽鋼無鎳指數）', mkTxt.includes('量不出來'),
+  mkTxt.slice(mkTxt.indexOf('原料曝險分布'), mkTxt.indexOf('原料曝險分布') + 200).replace(/\n/g, ' / '));
+ok('尚未定量的工項不會從曝險表悄悄消失',
+  mkTxt.includes('曝險未計入下方統計') && mkTxt.includes('還沒量到'),
+  mkTxt.includes('曝險未計入') ? '' : '被鎖定的 410.01 應該要被列出來');
+ok('敏感度標明是情境不是預測', mkTxt.includes('情境，不是預測') && mkTxt.includes('沒有人知道銅價下個月往哪走'));
+ok('列出鎖價窗口（接工序反推的發包日）', mkTxt.includes('鎖價窗口'), '');
+const bar = await page.locator('#dlgBody .gbar i').count();
+ok('曝險分布有分段圖', bar >= 3, String(bar));
+await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+
+ok('摘要列顯示原料連動金額', (await page.locator('#totals').innerText()).includes('其中原料連動'), '');
+
+const expo = await page.evaluate(() => {
+  const { state, PR, Q } = window.__takeoff;
+  const snap = PR.snapshotIndices(state.market);
+  const rows = [...state.selected].map((c) => {
+    const it = { ...state.itemByCode.get(c), priceBase: state.priceBase };
+    return PR.exposure(it, 100, snap);
+  });
+  const p = PR.portfolioExposure(rows);
+  return { amount: p.amount, exposed: p.exposed, fixed: p.fixed, uncovered: p.uncovered, n: p.uncoveredRows.length };
+});
+ok('曝險 + 固定 + 量不出來 = 總額',
+  Math.abs(expo.exposed + expo.fixed + expo.uncovered - expo.amount) < 0.01, JSON.stringify(expo));
+ok('不鏽鋼金額列入「量不出來」而非「固定」', expo.uncovered > 0 && expo.n >= 1, JSON.stringify(expo));
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
@@ -641,6 +743,7 @@ ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預
 ok('人工確認持久化', after.manual === 5600);
 ok('圖面量持久化', Math.abs(after.draw - 9.7124) < 0.001);
 ok('基準版與請購單持久化', after.baselines === 1 && after.prs === 1, JSON.stringify(after));
+ok('價格基準日持久化', await page.evaluate(() => !!window.__takeoff.state.priceBase));
 ok('工序持久化', after.tasks === 63, String(after.tasks));
 
 console.log('\n【9】無 JS 例外');
