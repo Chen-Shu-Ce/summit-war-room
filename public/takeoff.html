@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WBS 階層式工程量清單選擇器 — Summit War Room</title>
+<meta name="description" content="讀 DWG／DXF／PDF 圖面，量測後直接在數量旁給出建議採購量；WBS 階層選取、多來源數量比較、可信度評分、一鍵轉採購 Package。">
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --line2:#eceff3;
+  --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8;
+  --accent:#1d4ed8; --accent-soft:#e8eeff;
+  --ok:#15803d; --ok-bg:#e7f6ec; --warn:#b45309; --warn-bg:#fdf3e3; --bad:#b91c1c; --bad-bg:#fdecec;
+  --paper:#ffffff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,"Roboto Mono","Noto Sans Mono CJK TC",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI","PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  --h-head:52px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0b1120; --panel:#111a2e; --line:#22304d; --line2:#1a2540;
+    --ink:#e8eefc; --ink2:#9fb0cc; --ink3:#64748b;
+    --accent:#60a5fa; --accent-soft:#16243f;
+    --ok:#4ade80; --ok-bg:#10261a; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2c1414;
+    --paper:#f8fafc;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);-webkit-text-size-adjust:100%}
+button,input,select,textarea{font:inherit;color:inherit}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+
+/* ── 版面 ── */
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh}
+header.top{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);min-height:var(--h-head);flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.brand small{display:block;font-weight:400;color:var(--ink3);font-size:11px;letter-spacing:0}
+.spacer{flex:1}
+.cols{flex:1;display:grid;grid-template-columns:262px minmax(0,1fr) 340px;min-height:0}
+.col{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
+.col+.col{border-left:1px solid var(--line)}
+.col>h2{margin:0;padding:9px 12px;font-size:12px;font-weight:700;letter-spacing:.4px;color:var(--ink2);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;background:var(--panel);position:sticky;top:0;z-index:3}
+.col>h2 .chip{margin-left:auto}
+.scroll{overflow:auto;flex:1;min-height:0}
+
+/* ── 控制項 ── */
+button.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:5px 10px;cursor:pointer;white-space:nowrap}
+button.btn:hover{border-color:var(--accent);color:var(--accent)}
+button.btn[disabled]{opacity:.45;cursor:not-allowed}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn.primary:hover{filter:brightness(1.08);color:#fff}
+button.btn.sm{padding:2px 7px;font-size:12px;border-radius:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:5px 10px;cursor:pointer;color:var(--ink2)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+input[type=text],input[type=number],input[type=date],select,textarea{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 7px;width:100%;min-width:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+label.f{display:block;font-size:11px;color:var(--ink3);margin:0 0 2px}
+.chip{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 8px;font-size:11px;font-family:var(--mono);border:1px solid var(--line);color:var(--ink2)}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.acc{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.muted{color:var(--ink3)}
+.hint{font-size:11px;color:var(--ink3)}
+
+/* ── 左：WBS 樹 ── */
+.treewrap{padding:6px 0}
+.node{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:default;border-radius:6px}
+.node:hover{background:var(--line2)}
+.node.active{background:var(--accent-soft)}
+.node .tw{width:16px;text-align:center;color:var(--ink3);cursor:pointer;user-select:none;flex:none}
+.node .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.node .code{font-family:var(--mono);color:var(--ink3);font-size:11px;flex:none}
+.node .cnt{font-family:var(--mono);font-size:11px;color:var(--ink3);flex:none}
+.node input[type=checkbox]{flex:none;margin:0}
+
+/* ── 中：表格 ── */
+.midbar{display:flex;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+table.boq{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
+table.boq th,table.boq td{padding:5px 8px;border-bottom:1px solid var(--line2);vertical-align:middle}
+table.boq thead th{position:sticky;top:0;background:var(--panel);z-index:2;text-align:left;font-size:11px;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+table.boq tbody tr:hover{background:var(--line2)}
+table.boq tbody tr.sel{background:var(--accent-soft)}
+table.boq tbody tr.blocked td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
+.grp td{background:var(--line2);font-weight:700;font-size:11.5px;color:var(--ink2);letter-spacing:.3px}
+.nm2{max-width:230px}
+.nm2 b{font-weight:600}
+.nm2 small{display:block;color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cellin{width:64px}
+td.sug{font-weight:700}
+.srcbtn{border:0;background:transparent;padding:0;cursor:pointer;font:inherit;color:inherit;text-decoration:underline dotted var(--ink3);text-underline-offset:3px}
+.bandA{background:var(--ok-bg);color:var(--ok)}
+.bandB{background:var(--accent-soft);color:var(--accent)}
+.bandC{background:var(--warn-bg);color:var(--warn)}
+.bandD{background:var(--bad-bg);color:var(--bad)}
+
+/* ── 右：已選 / 採購包 ── */
+.cartitem{border-bottom:1px solid var(--line2);padding:7px 12px;display:flex;gap:8px;align-items:flex-start}
+.cartitem .g{flex:1;min-width:0}
+.cartitem b{font-weight:600}
+.pkg{border:1px solid var(--line);border-radius:9px;margin:8px 12px;overflow:hidden}
+.pkg>header{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--line2);font-size:12px}
+.pkg .body{padding:7px 9px;display:grid;gap:6px}
+.pkg .row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.totbar{border-top:1px solid var(--line);padding:9px 12px;display:grid;gap:5px;background:var(--panel)}
+.totrow{display:flex;justify-content:space-between;gap:8px}
+.totrow b{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── 圖面面板 ── */
+.viewwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.viewwrap.on{display:flex}
+.tablewrap{display:flex;flex-direction:column;min-height:0;flex:1}
+.tablewrap.off{display:none}
+.toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+#cv{flex:1;min-height:220px;width:100%;display:block;background:var(--paper);touch-action:none}
+.viewfoot{display:flex;gap:10px;align-items:center;padding:5px 10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
+.mlist{max-height:150px;overflow:auto;border-top:1px solid var(--line)}
+.mrow{display:flex;gap:7px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line2);font-size:12px}
+.mrow .v{font-family:var(--mono);min-width:104px;text-align:right}
+.layerrow{display:flex;gap:7px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line2);font-size:12px}
+.layerrow .lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11.5px}
+
+/* ── 對話框 ── */
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--ink);max-width:min(680px,94vw);width:100%}
+dialog::backdrop{background:rgba(8,12,22,.5)}
+dialog h3{margin:0;padding:11px 15px;border-bottom:1px solid var(--line);font-size:14px}
+dialog .dbody{padding:14px 15px;max-height:70vh;overflow:auto}
+dialog footer{padding:10px 15px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+table.fac{width:100%;border-collapse:collapse;font-size:12px}
+table.fac td{padding:3px 6px;border-bottom:1px solid var(--line2)}
+table.fac td:last-child{text-align:right;font-family:var(--mono)}
+.pos{color:var(--ok)} .neg{color:var(--bad)}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:16px;text-align:center;color:var(--ink3)}
+.drop.hot{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.k{font-family:var(--mono);background:var(--line2);border-radius:4px;padding:0 4px}
+
+/* ── 窄螢幕 ── */
+.tabbar{display:none;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+@media (max-width:1100px){
+  .cols{grid-template-columns:1fr}
+  .col{display:none}
+  .col.show{display:flex}
+  .col+.col{border-left:0}
+  .tabbar{display:flex}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">WBS 階層式工程量清單選擇器<small>Summit War Room · Quantity Takeoff → Procurement Package</small></div>
+    <div class="spacer"></div>
+    <button class="btn" id="btnImportDrawing">載入圖面 (DWG/DXF/PDF)</button>
+    <button class="btn" id="btnImportBoq">匯入 BOQ CSV</button>
+    <button class="btn" id="btnSettings">參數</button>
+    <button class="btn" id="btnExport">匯出</button>
+    <button class="btn" id="btnHelp">說明</button>
+  </header>
+
+  <div class="tabbar">
+    <div class="seg" role="tablist">
+      <button data-tab="0" aria-pressed="true">分類</button>
+      <button data-tab="1" aria-pressed="false">清單</button>
+      <button data-tab="2" aria-pressed="false">已選</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- 左：WBS -->
+    <section class="col show" id="colLeft">
+      <h2>WBS 分類<span class="chip" id="wbsCount">—</span></h2>
+      <div style="padding:7px 10px;border-bottom:1px solid var(--line)">
+        <input type="text" id="treeSearch" placeholder="搜尋分類／工項／規格…">
+      </div>
+      <div class="scroll"><div class="treewrap" id="tree"></div></div>
+      <div class="viewfoot">
+        <button class="btn sm" id="btnExpandAll">全部展開</button>
+        <button class="btn sm" id="btnCollapseAll">全部收合</button>
+      </div>
+    </section>
+
+    <!-- 中：BOM / 圖面 -->
+    <section class="col show" id="colMid">
+      <h2>
+        <span id="midTitle">工程量清單 (BOM)</span>
+        <div class="seg" style="margin-left:auto">
+          <button id="tabList" aria-pressed="true">清單</button>
+          <button id="tabView" aria-pressed="false">圖面量測</button>
+        </div>
+      </h2>
+
+      <div class="tablewrap" id="tableWrap">
+        <div class="midbar">
+          <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" id="selAll" style="width:auto"> 全選本頁</label>
+          <button class="btn sm" id="btnAddSel">加入已選</button>
+          <button class="btn sm" id="btnRmSel">移出已選</button>
+          <span class="spacer"></span>
+          <label style="display:flex;gap:5px;align-items:center" class="hint"><input type="checkbox" id="onlyIssues" style="width:auto"> 只看需複核／鎖定</label>
+        </div>
+        <div class="scroll">
+          <table class="boq" id="boq">
+            <thead><tr>
+              <th style="width:26px"></th>
+              <th>工項</th>
+              <th style="width:44px">單位</th>
+              <th class="num" style="width:82px">圖面量</th>
+              <th class="num" style="width:82px">BOQ量</th>
+              <th class="num" style="width:88px">差異</th>
+              <th style="width:96px">正式採購基準</th>
+              <th style="width:74px">可信度</th>
+              <th class="num" style="width:80px">損耗率 %</th>
+              <th class="num" style="width:96px">建議採購量</th>
+              <th class="num" style="width:104px">下單量</th>
+              <th class="num" style="width:96px">預估金額</th>
+            </tr></thead>
+            <tbody id="boqBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="viewwrap" id="viewWrap">
+        <div class="toolbar">
+          <div class="seg" id="tools">
+            <button data-tool="pan" aria-pressed="true">平移</button>
+            <button data-tool="length">長度</button>
+            <button data-tool="area">面積</button>
+            <button data-tool="rect">矩形</button>
+            <button data-tool="count">計數</button>
+            <button data-tool="angle">角度</button>
+            <button data-tool="calib">比例校正</button>
+          </div>
+          <button class="btn sm" id="btnFit">全覽</button>
+          <button class="btn sm" id="btnSnap" aria-pressed="true">吸附 S</button>
+          <button class="btn sm" id="btnOrtho" aria-pressed="false">正交 O</button>
+          <button class="btn sm" id="btnLayers">圖層／自動抓量</button>
+          <span class="spacer"></span>
+          <span class="chip" id="pageChip" hidden></span>
+          <span class="chip" id="scaleChip">比例：未設定</span>
+        </div>
+        <canvas id="cv"></canvas>
+        <div class="viewfoot">
+          <span id="coord" class="num">—</span>
+          <span class="muted">左鍵下點 · 雙擊／右鍵／<span class="k">Enter</span> 結束 · <span class="k">Esc</span> 取消 · <span class="k">Backspace</span> 退一點 · 滾輪縮放</span>
+          <span class="spacer"></span>
+          <span id="drawName" class="muted">未載入圖面</span>
+        </div>
+        <div class="mlist" id="mlist"></div>
+      </div>
+    </section>
+
+    <!-- 右：已選 + 採購包 -->
+    <section class="col show" id="colRight">
+      <h2>已選清單<span class="chip" id="cartCount">0</span></h2>
+      <div class="scroll" id="cart"></div>
+      <div class="totbar" id="totals"></div>
+      <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
+        <button class="btn primary" id="btnToPkg">轉採購 Package</button>
+        <button class="btn" id="btnClearCart">清空</button>
+      </div>
+      <h2 style="border-top:1px solid var(--line)">採購包<span class="chip" id="pkgCount">0</span></h2>
+      <div class="scroll" id="pkgs" style="max-height:38vh"></div>
+    </section>
+  </div>
+</div>
+
+<input type="file" id="fileDrawing" accept=".dxf,.dwg,.pdf,application/pdf" hidden>
+<input type="file" id="fileBoq" accept=".csv,text/csv" hidden>
+<input type="file" id="fileProject" accept=".json,application/json" hidden>
+
+<dialog id="dlg"><h3 id="dlgTitle">—</h3><div class="dbody" id="dlgBody"></div><footer id="dlgFoot"></footer></dialog>
+
+<script type="module" src="./js/takeoff/app.js"></script>
+</body>
+</html>
