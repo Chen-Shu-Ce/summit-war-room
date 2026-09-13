@@ -142,6 +142,8 @@ export const RFI_TYPES = {
   'equip-vs-detail': { label: '設備表 ≠ 詳圖', ask: '設計單位' },
   'qty-undeterminable': { label: '數量無法判斷', ask: '設計單位／監造' },
   'spec-incomplete': { label: '規格不完整', ask: '設計單位' },
+  'calc-vs-drawing': { label: '計算式 ≠ 圖面幾何', ask: '設計單位' },
+  'calc-error': { label: '計算式本身有誤', ask: '設計單位' },
 };
 
 const SEV_ORDER = { high: 0, med: 1, low: 2 };
@@ -179,6 +181,38 @@ export function detectRfi(ctx) {
           { label: 'BOQ 量', value: `${Q.fmt(it.qty.boq, 2)} ${it.unit}`, from: 'BOQ' },
           { label: '差異率', value: Q.pct(v.pct), from: `容忍 ${Q.pct(s.varianceWarn)}` },
         ],
+      });
+    }
+
+    // 1之二) 計算式 ≠ 圖面幾何
+    //   兩者都來自同一張圖，但一個是設計者寫下的尺寸相乘、一個是我從線段算出來的面積。
+    //   不符就是二者必有一錯 —— 不是標註過期，就是圖面沒照標註畫。
+    if (Q.isNum(it.qty.calc) && Q.isNum(it.qty.drawing)) {
+      const d = Math.abs(it.qty.calc - it.qty.drawing);
+      const rate = Math.abs(it.qty.drawing) > 0 ? d / Math.abs(it.qty.drawing) : 0;
+      if (rate > s.varianceWarn) {
+        push({
+          type: 'calc-vs-drawing', itemCode: it.code, wbs: it.wbs,
+          severity: rate > s.varianceStop ? 'high' : 'med',
+          title: `${it.name} 圖面計算式與幾何量差異 ${Q.pct(rate)}`,
+          question: `圖上計算式算出 ${Q.fmt(it.qty.calc, 2)} ${it.unit}，但依圖面幾何量測為 ${Q.fmt(it.qty.drawing, 2)} ${it.unit}，差異 ${Q.fmt(d, 2)} ${it.unit}（${Q.pct(rate)}）。兩者同出一張圖，請確認是標註尺寸未更新，還是圖面未依標註繪製。`,
+          evidence: [
+            { label: '圖面計算式', value: `${Q.fmt(it.qty.calc, 2)} ${it.unit}`, from: it.calcSource || '圖面計算式表' },
+            { label: '幾何量測', value: `${Q.fmt(it.qty.drawing, 2)} ${it.unit}`, from: provLabel(it) },
+            { label: '差異率', value: Q.pct(rate), from: `容忍 ${Q.pct(s.varianceWarn)}` },
+          ],
+        });
+      }
+    }
+
+    // 1之三) 計算式本身算錯（重算與圖上寫的數字不符）
+    if (it.calcIssues && it.calcIssues.some((x) => x.level === 'bad')) {
+      const bad = it.calcIssues.filter((x) => x.level === 'bad');
+      push({
+        type: 'calc-error', itemCode: it.code, wbs: it.wbs, severity: 'high',
+        title: `${it.name} 圖面計算式有 ${bad.length} 處錯誤`,
+        question: `圖上計算式經重算後發現 ${bad.length} 處不符：${bad.slice(0, 3).map((x) => x.msg).join('；')}。請確認應以何者為準並更新圖面。`,
+        evidence: bad.slice(0, 4).map((x) => ({ label: x.label, value: x.msg, from: `列 ${x.row}` })),
       });
     }
 

@@ -633,6 +633,78 @@ ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seq
 ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
 await page.waitForTimeout(400);
 
+console.log('\n【7之三】圖面計算式');
+await page.locator('#tabView').click();
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-calcsheet.dxf'));
+await page.waitForFunction(() => window.__takeoff.state.calc !== null, null, { timeout: 15000 });
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+let csTxt = await page.locator('#dlgBody').innerText();
+ok('載入 DXF 後自動偵測到計算式表', csTxt.includes('找到') && csTxt.includes('計算式'), '');
+ok('回報缺 SHX 字型造成的中文亂碼', csTxt.includes('亂碼') && csTxt.includes('數字與運算子不受字型影響'), '');
+ok('明說計算式與幾何量是兩條獨立來源', csTxt.includes('兩條獨立來源'), '');
+
+const cs = await page.evaluate(() => {
+  const v = window.__takeoff.state.calc.verify;
+  const gt = window.__takeoff.CS.grandTotal(window.__takeoff.state.calc.sheet);
+  return { rows: v.counts.rows, passed: v.counts.passed, bad: v.counts.bad, warn: v.counts.warn,
+    total: gt && gt.stated, unit: gt && gt.unit, declared: v.declared.map((d) => d.stated) };
+});
+ok('真實計算式表 14 式全部重算相符', cs.rows === 14 && cs.passed === 14, JSON.stringify(cs));
+ok('零誤報（大面積扣除法與階層合計都不算錯）', cs.bad === 0, JSON.stringify(cs));
+ok('算出總計 1509.04 M2', Math.abs(cs.total - 1509.04) < 0.001 && cs.unit === 'M2', JSON.stringify(cs));
+ok('圖上宣告值被辨識出來', cs.declared.some((d) => Math.abs(d - 1509.04) < 0.001), JSON.stringify(cs.declared));
+
+await page.locator('#dlgFoot button.primary').click();   // 查看與套用
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+csTxt = await page.locator('#dlgBody').innerText();
+ok('逐式驗算表列出重算值與圖上值', csTxt.includes('逐式驗算') && csTxt.includes('24.565*20.80'), '');
+// 這份表被裁掉了 ⓐ 列，所以會有兩個警告 —— 那是正確的發現，不是誤報
+ok('如實列出問題清單（被裁掉的 ⓐ 造成 2 個警告，0 個錯誤）',
+  csTxt.includes('問題（2）') && csTxt.includes('參照不存在') && csTxt.includes('合計有孤項'),
+  csTxt.slice(csTxt.indexOf('問題'), csTxt.indexOf('問題') + 160).replace(/\n/g, ' / '));
+ok('計算式晶片顯示在工具列', await page.locator('#calcChip').isVisible());
+
+// 套用到工項：單位相符
+await page.selectOption('#calcPick', { index: 0 });
+await page.selectOption('#calcItem', '230.01');           // 抛光石英磚，單位 M2
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(400);
+const applied = await page.evaluate(() => {
+  const it = window.__takeoff.state.itemByCode.get('230.01');
+  return { calc: it.qty.calc, src: it.calcSource };
+});
+ok('計算式量寫入工項的第五條來源', Math.abs(applied.calc - 1509.04) < 0.001, JSON.stringify(applied));
+ok('保留計算式出處可稽核', /=1509.04/.test(applied.src || ''), applied.src);
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+
+// 單位不一致必須擋下來
+await page.locator('#calcChip').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(250);
+await page.selectOption('#calcPick', { index: 0 });
+await page.selectOption('#calcItem', '321.01');           // 電纜，單位 M
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(400);
+const blocked = await page.evaluate(() => ({
+  title: document.querySelector('#dlgTitle').textContent,
+  txt: document.querySelector('#dlgBody').innerText,
+  calc: window.__takeoff.state.itemByCode.get('321.01').qty.calc ?? null,
+}));
+ok('單位不一致時擋下並說明，不代為換算',
+  /單位不一致/.test(blocked.title) && /不會替你換算/.test(blocked.txt) && blocked.calc === null,
+  JSON.stringify(blocked).slice(0, 200));
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+
+// 算式求值不得使用 eval
+ok('算式求值拒絕任何非算術字元', await page.evaluate(() => {
+  const CS = window.__takeoff.CS;
+  return ['constructor', 'process.exit(1)', '1;alert(1)', 'globalThis'].every((e) => !!CS.evaluate(e).error);
+}));
+
 console.log('\n【7之二】原料行情連動');
 await page.locator('#tabList').click();
 await page.evaluate(() => {

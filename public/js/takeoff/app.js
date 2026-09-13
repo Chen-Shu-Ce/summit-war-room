@@ -13,6 +13,7 @@ import * as B from './baseline.js';
 import * as R from './risk.js';
 import * as S from './sequence.js';
 import * as PR from './pricing.js';
+import * as CS from './calcsheet.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -52,6 +53,7 @@ const state = {
   market: null,        // /api/market-data 的行情
   marketErr: null,
   priceBase: null,     // 價格基準快照（凍結後才會有調整額）
+  calc: null,          // 圖面計算式表的解析與驗算結果
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -146,6 +148,7 @@ function persist() {
         code: i.code, qty: i.qty, wasteRate: i.wasteRate, basisOverride: i.basisOverride,
         unitPrice: i.unitPrice, order: i.order, manualBy: i.manualBy, manualNote: i.manualNote,
         provenance: i.provenance, drawingSource: i.drawingSource, layerMapped: i.layerMapped,
+        calcSource: i.calcSource, calcIssues: i.calcIssues,
         coverage: i.coverage, calibration: i.calibration, calibrationRms: i.calibrationRms,
         packageId: i.packageId, closed: i.closed,
       })),
@@ -515,6 +518,7 @@ function wire() {
   $('#btnAutoPkg').onclick = autoPackage;
   $('#btnSim').onclick = openPortfolioSim;
   $('#btnMarket').onclick = openMarket;
+  $('#calcChip').onclick = openCalcSheet;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -708,6 +712,7 @@ async function loadDxfFile(file) {
   $('#pageChip').hidden = true;
   updateScaleChip();
   renderMeasureList();
+  detectCalcSheet(doc, file.name);
   if (!doc.units.toM) {
     dialog('圖檔未定義單位', `<p>此 DXF 的 <code>$INSUNITS</code> 為「未定義」，無法自動換算成公尺。請指定圖檔單位：</p>
       <div class="fgrid">${[[0.001, '公厘 mm'], [0.01, '公分 cm'], [1, '公尺 m'], [0.0254, '英吋 in']].map(([v, l]) =>
@@ -938,6 +943,133 @@ function openAssign(mid) {
         renderAll(); renderMeasureList();
       },
     }]);
+}
+
+/* ══════════ 圖面計算式 ══════════ */
+
+/**
+ * DXF 載入後自動找計算式表。
+ * 台灣 QS 習慣把算式直接寫在圖上 —— 那是設計者親手寫下的數量意圖，
+ * 而且是唯一一條會自我驗算的來源：算式可重算、交叉參照可追、合計可驗。
+ */
+function detectCalcSheet(doc, name) {
+  const texts = DXF.flatten(doc).filter((e) => e.type === 'TEXT')
+    .map((e) => ({ text: e.text, x: e.pt.x, y: e.pt.y, height: e.h }));
+  if (texts.length < 3) { state.calc = null; renderCalcChip(); return; }
+  const sheet = CS.parseSheet(texts);
+  if (!sheet.rows.length) { state.calc = null; renderCalcChip(); return; }
+  const v = CS.verify(sheet);
+  state.calc = { source: name, sheet, verify: v, at: new Date().toISOString() };
+  renderCalcChip();
+  const bad = v.counts.bad;
+  setTimeout(() => dialog('圖上找到計算式表', `
+    <p>在《${esc(name)}》找到 <b>${v.counts.rows}</b> 道計算式，
+    重算後 <b>${v.counts.passed}</b> 道相符${bad ? `、<b class="bad">${bad} 處有問題</b>` : '、<b>零錯誤</b>'}。</p>
+    ${calcMojibakeNote(sheet)}
+    ${bad ? `<p class="chip bad" style="display:block;padding:8px 10px">${v.issues.filter((i) => i.level === 'bad').slice(0, 3).map((i) => esc(`${i.label}（${i.row}）：${i.msg}`)).join('<br>')}</p>` : ''}
+    <p class="hint">計算式是設計者寫下的數量意圖，與我從線段算出來的幾何量是<b>兩條獨立來源</b>。
+    兩者相符代表圖上畫的跟標的一致；不符就是必有一錯 —— 那正是最該發 RFI 的情形。</p>`,
+    [{ label: '查看與套用', primary: true, fn: () => setTimeout(openCalcSheet, 60) }, { label: '稍後' }]), 60);
+}
+
+function calcMojibakeNote(sheet) {
+  const m = sheet.mojibake;
+  if (!m || m.ratio < 0.25) return '';
+  return `<p class="chip warn" style="display:block;padding:8px 10px">
+    這份圖有 <b>${m.count}/${m.total}</b> 個文字是亂碼（缺 SHX 大字型對應，中文全部變成問號）。
+    <b>數字與運算子不受字型影響，算式照樣可以驗算</b>，但工項名稱必須人工對照 ——
+    我讀得出 <code>8.58*7.265=62.33</code>，讀不出它叫什麼。</p>`;
+}
+
+function renderCalcChip() {
+  const el = $('#calcChip');
+  if (!el) return;
+  if (!state.calc) { el.hidden = true; return; }
+  const c = state.calc.verify.counts;
+  el.hidden = false;
+  el.className = 'chip ' + (c.bad ? 'bad' : c.warn ? 'warn' : 'ok');
+  el.style.cursor = 'pointer';
+  el.textContent = `計算式 ${c.passed}/${c.rows}${c.bad ? ` · ${c.bad} 錯` : ''}`;
+}
+
+function openCalcSheet() {
+  if (!state.calc) return dialog('尚未找到計算式', '<p>載入含計算式表的 DXF 後，這裡會列出每一道算式的驗算結果。</p>');
+  const { sheet, verify: v } = state.calc;
+  const gt = CS.grandTotal(sheet);
+  const badge = (r) => r.error ? '<span class="chip warn">看不懂</span>'
+    : r.ok ? '<span class="chip ok">✓</span>' : '<span class="chip bad">✗</span>';
+  dialog(`圖面計算式 · ${state.calc.source}`, `
+    <div class="feas" style="${v.counts.bad ? '' : 'border-color:var(--ok);background:var(--ok-bg)'}">
+      <b>${v.counts.rows} 道算式，${v.counts.passed} 道重算相符${v.counts.bad ? `，${v.counts.bad} 處有問題` : '，零錯誤'}。</b>
+      ${gt ? `　總計 <b>${Q.fmt(gt.stated, 2)} ${esc(gt.unit || '')}</b>` : ''}
+      ${v.declared.length ? `<div class="hint" style="margin-top:4px">圖上另外宣告 ${v.declared.map((d) => `${Q.fmt(d.stated, 2)}${esc(d.unit || '')}（另有 ${d.confirmedBy} 處相符）`).join('、')}</div>` : ''}
+    </div>
+    ${calcMojibakeNote(sheet)}
+    ${v.issues.length ? `<h4 style="margin:13px 0 6px">問題（${v.issues.length}）</h4>
+      <table class="mkt" style="table-layout:fixed;width:100%"><tbody>${v.issues.map((i) => `<tr>
+        <td style="width:96px"><span class="chip ${i.level === 'bad' ? 'bad' : 'warn'}">${esc(i.label)}</span></td>
+        <td style="width:46px">${esc(i.row)}</td>
+        <td style="white-space:normal">${esc(i.msg)}<div class="hint">${esc(i.note)}</div></td></tr>`).join('')}</tbody></table>`
+      : '<p class="chip ok" style="display:block;padding:8px 10px;margin-top:12px">全部通過：每道算式重算相符、交叉參照一致、合計有出處。</p>'}
+
+    <h4 style="margin:14px 0 6px">逐式驗算</h4>
+    <div style="overflow-x:auto"><table class="mkt" style="min-width:640px">
+      <thead><tr><th style="width:30px"></th><th style="width:34px">列</th><th>算式</th>
+      <th class="n" style="width:78px">重算</th><th class="n" style="width:78px">圖上</th>
+      <th style="width:44px">單位</th><th style="width:64px">參照</th></tr></thead>
+      <tbody>${v.rows.map((r) => `<tr class="${r.ok === false ? 'bad' : ''}">
+        <td>${badge(r)}</td>
+        <td>${esc(r.mark || (r.isTotal ? '計' : '—'))}</td>
+        <td style="white-space:normal;font-family:var(--mono);font-size:11.5px;word-break:break-all">${esc(r.expr)}
+          ${r.mark ? `<div class="hint" style="font-family:var(--font)">${esc(r.label)}</div>` : ''}</td>
+        <td class="n">${r.error ? '—' : Q.fmt(r.rounded, r.decimals)}</td>
+        <td class="n"><b>${Q.fmt(r.stated, r.decimals)}</b></td>
+        <td>${esc(r.unit || '')}</td>
+        <td class="hint">${r.refs.length ? esc(r.refs.join('、')) : ''}</td></tr>`).join('')}</tbody></table></div>
+
+    <h4 style="margin:14px 0 6px">套用到工項</h4>
+    <p class="hint">計算式會寫進工項的「圖面計算式」欄，成為第五條獨立來源，與幾何量、BOQ 量三方比對。
+    <b>只套用數字，不覆蓋任何既有來源。</b></p>
+    <div class="fgrid">
+      <div><label class="f">套用哪一個數值</label><select id="calcPick">
+        ${gt ? `<option value="__total__">總計 ${Q.fmt(gt.stated, 2)} ${esc(gt.unit || '')}</option>` : ''}
+        ${v.rows.filter((r) => !r.isTotal && r.ok).map((r) => `<option value="${r.y}">${esc(r.mark || '—')} ${esc(r.label || '')} · ${Q.fmt(r.stated, 2)} ${esc(r.unit || '')}</option>`).join('')}
+      </select></div>
+      <div><label class="f">套用到工項</label><select id="calcItem">
+        <option value="">— 選一個工項 —</option>
+        ${state.items.map((it) => `<option value="${esc(it.code)}">${esc(it.code)} · ${esc(it.name)}（${esc(it.unit)}）</option>`).join('')}
+      </select></div>
+    </div>`,
+    [{ label: '關閉' }, { label: '套用', primary: true, fn: applyCalcToItem }]);
+}
+
+function applyCalcToItem() {
+  const code = $('#calcItem') && $('#calcItem').value;
+  const pick = $('#calcPick') && $('#calcPick').value;
+  if (!code || !pick) return;
+  const it = state.itemByCode.get(code);
+  if (!it) return;
+  const { sheet, verify: v } = state.calc;
+  const row = pick === '__total__' ? CS.grandTotal(sheet) : v.rows.find((r) => String(r.y) === pick);
+  if (!row) return;
+
+  if (row.unit && it.unit && CS.normUnit(it.unit) !== row.unit) {
+    return setTimeout(() => dialog('單位不一致，未套用', `<p>計算式的單位是 <b>${esc(row.unit)}</b>，
+      工項「${esc(it.name)}」的單位是 <b>${esc(it.unit)}</b>。</p>
+      <p class="hint">單位不同就不是同一種量。工具不會替你換算 —— 面積換長度需要厚度或寬度，
+      那是工程判斷，不是算術。請先確認要套用的是哪一列。</p>`), 60);
+  }
+
+  it.qty.calc = row.stated;
+  it.calcSource = `${state.calc.source} · ${row.mark ? `列 ${row.mark}` : '總計'}：${row.expr}=${row.stated}`;
+  it.calcIssues = v.issues.filter((i) => i.row === (row.mark || '—'));
+  const cross = CS.crossCheck(row.stated, it.qty.drawing);
+  renderAll(); persist();
+  setTimeout(() => dialog('已套用', `
+    <p>「${esc(it.name)}」的圖面計算式量 = <b>${Q.fmt(row.stated, 2)} ${esc(it.unit)}</b></p>
+    <p class="hint">出處：${esc(it.calcSource)}</p>
+    ${cross ? `<p class="chip ${cross.agree ? 'ok' : 'bad'}" style="display:block;padding:8px 10px">
+      幾何量 ${Q.fmt(cross.drawing, 2)}，差異 ${Q.pct(cross.rate)}。${esc(cross.verdict)}</p>` : ''}`), 60);
 }
 
 /* ══════════ 圖層 → 工項自動抓量 ══════════ */
@@ -2799,4 +2931,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, runAnalysis, renderAll, runSchedule, loadMarket };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

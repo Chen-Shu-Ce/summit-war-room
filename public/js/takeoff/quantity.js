@@ -11,21 +11,32 @@
 
 export const SOURCE_META = {
   manual:  { key: 'manual',  label: '人工確認', short: '人工', base: 88, indep: true  },
+  calc:    { key: 'calc',    label: '圖面計算式', short: '算式', base: 82, indep: true  },
   drawing: { key: 'drawing', label: '圖面量',   short: '圖面', base: 78, indep: true  },
   boq:     { key: 'boq',     label: 'BOQ量',    short: 'BOQ',  base: 70, indep: true  },
   vendor:  { key: 'vendor',  label: '供應商量', short: '廠商', base: 66, indep: true  },
   history: { key: 'history', label: '歷史類比', short: '歷史', base: 52, indep: false },
 };
 
-/** 自動選基準時的優先序（僅在差異規則未攔截時適用）。 */
-export const BASIS_PRIORITY = ['manual', 'drawing', 'boq', 'vendor', 'history'];
+/**
+ * 自動選基準時的優先序（僅在差異規則未攔截時適用）。
+ *
+ * 計算式排在圖面量測之前：它是設計者親手寫下的意圖，而且會自我驗算
+ *（算式可重算、交叉參照可追、合計可驗）。我的幾何量測是對同一張圖的再詮釋，
+ * 有比例、圖層、封閉性等一堆會出錯的環節。設計者寫的數字，證據位階比較高。
+ */
+export const BASIS_PRIORITY = ['manual', 'calc', 'drawing', 'boq', 'vendor', 'history'];
 
 /**
  * 交叉驗證只採計「獨立量測來源」。
  * 人工確認是對其他來源做的判斷、歷史類比是外插，兩者都不是獨立觀測，
  * 若納入一致性計算會造成自我印證（circular corroboration），把信心分數灌水。
+ *
+ * 計算式算獨立：它和我的幾何量測雖然來自同一張圖，卻是**不同方法、不同作者、
+ * 不同時間**——設計者的尺寸相乘 vs 我從線段算出來的面積。兩者相符代表圖上
+ * 畫的跟標的一致；不符就是二者必有一錯，那正是最該發 RFI 的情形。
  */
-export const INDEPENDENT_SOURCES = ['drawing', 'boq', 'vendor'];
+export const INDEPENDENT_SOURCES = ['calc', 'drawing', 'boq', 'vendor'];
 
 /** 正分上限：信心不可能高過最佳來源本身太多，但扣分不設下限（可扣到 0）。 */
 export const MAX_BONUS = 12;
