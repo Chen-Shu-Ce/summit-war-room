@@ -18,6 +18,7 @@ import * as ENC from './encoding.js';
 import * as U from './units.js';
 import * as SV from './survey.js';
 import * as PS from './pdfscale.js';
+import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -342,7 +343,7 @@ function selectedItems() { return state.items.filter((i) => state.selected.has(i
  */
 /**
  * 單一入口：套用服務水準（數量）與行情連動（單價）。
- * 所有下游 —— 金額合計、採購包、基準版、請購單、CSV —— 都走這裡，
+ * 所有下游 —— 金額合計、採購包、基準版、請購單、Excel 匯出 —— 都走這裡，
  * 才不會出現「畫面上是連動價、匯出的是基準價」這種對不起來的情形。
  */
 function priced(it) {
@@ -431,7 +432,7 @@ function renderPkgs() {
       <header><b>${esc(p.code)}</b><span class="chip">${items.length} 項</span><span class="chip acc">NT$ ${Q.fmt(s.cost, 0)}</span>
         <span class="spacer" style="flex:1"></span>
         <button class="btn sm" data-pkg-freeze="${i}">凍結為基準版</button>
-        <button class="btn sm" data-pkg-csv="${i}">RFQ CSV</button>
+        <button class="btn sm" data-pkg-csv="${i}">RFQ Excel</button>
         <button class="btn sm" data-pkg-del="${i}">刪除</button></header>
       <div class="body">
         <div class="row">
@@ -1683,7 +1684,7 @@ function exportSeqCsv() {
     const row = S.toRow(t, r.tasks, state.items);
     return [...S.TASK_COLUMNS.map((c) => row[c.key]), t.es, t.ef, t.ls, t.lf, t.float, t.critical ? '是' : '', t.duration];
   });
-  download(`施工工序-${new Date().toISOString().slice(0, 10)}.csv`, [head, ...rows].map((x) => x.map(csvCell).join(',')).join('\n'));
+  exportExcel('施工工序', [{ name: '施工工序', rows: [head, ...rows] }]);
 
   const chains = S.materialChains(r.tasks, state.items, { ...seqOpts(), today: new Date() });
   if (chains.length) {
@@ -1691,7 +1692,7 @@ function exportSeqCsv() {
     const r2 = chains.map((c) => [c.itemCode, c.itemName, c.unit, `${c.taskCode} ${c.taskName}`, c.taskStart,
       c.needOnSite, c.approveBy, c.submitBy, c.poBy, c.prBy, c.leadTimeDays, c.submittalDays,
       { overdue: '已逾期', urgent: '急迫', ok: '' }[c.status]]);
-    download(`材料需求日-${new Date().toISOString().slice(0, 10)}.csv`, [h2, ...r2].map((x) => x.map(csvCell).join(',')).join('\n'));
+    exportExcel('材料需求日', [{ name: '材料需求日', rows: [h2, ...r2] }]);
   }
 }
 
@@ -1996,7 +1997,7 @@ function openPortfolioSim() {
       損耗是會一起變差的。ρ 預設 0.3 是保守的折衷，可在參數調整。</p>
     <p class="hint">收斂指標 ${(r.convergence * 100).toFixed(2)}%（前後半樣本的 P80 差異）。
       ${r.convergence > 0.02 ? '<b style="color:var(--warn)">超過 2%，建議提高迭代次數。</b>' : '低於 2%，迭代次數足夠。'}</p>`,
-    [{ label: '關閉' }, { label: '匯出模擬 CSV', fn: () => exportSimCsv(r) }]);
+    [{ label: '關閉' }, { label: '匯出模擬 Excel', fn: () => exportSimCsv(r) }]);
 }
 
 function exportSimCsv(r) {
@@ -2008,8 +2009,8 @@ function exportSimCsv(r) {
     head,
     ...r.items.map((x) => [x.code, x.name, x.unit, x.base, x.stochastic ? '是' : '否',
       x.qty.p5, x.qty.p50, x.qty.p80, x.qty.p90, x.qty.p95, x.qty.mean, x.qty.sd]),
-  ].map((row) => row.map(csvCell).join(','));
-  download(`風險模擬-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
+  ];
+  exportExcel('風險模擬', [{ name: '風險模擬', rows: lines }]);
 }
 
 /* ══════════ 基準版 / 請購單 ══════════ */
@@ -2213,8 +2214,8 @@ function openExportPr(no) {
       <div style="align-self:end"><button class="btn" id="eMap">設定欄位對映</button></div>
     </div>
     <p class="hint" style="margin-top:10px">本工具不綁任何一套 ERP：中性資料模型 + 可設定的欄位對映。
-    把對方的欄位名稱填進對映表，匯出的 CSV 就能直接餵進去。</p>`,
-    [{ label: '關閉' }, { label: '下載 CSV', primary: true, fn: () => downloadPr(pr.no, $('#eProf') ? $('#eProf').value : prof) }],
+    把對方的欄位名稱填進對映表，匯出的 Excel 表頭就會用那個名字，可直接餵進去。</p>`,
+    [{ label: '關閉' }, { label: '下載 Excel', primary: true, fn: () => downloadPr(pr.no, $('#eProf') ? $('#eProf').value : prof) }],
     (body) => {
       body.querySelector('#eProf').onchange = (e) => { state.settings.erpProfile = e.target.value; persist(); };
       body.querySelector('#eMap').onclick = () => { $('#dlg').close(); setTimeout(() => openErpMapping(pr.no), 60); };
@@ -2229,7 +2230,7 @@ function openErpMapping(no) {
     <input type="text" data-map="${kind}:${esc(f.key)}" value="${esc((m[kind] || {})[f.key] || '')}" placeholder="${esc(f.label)}"></div>`;
   dialog('ERP 欄位對映', `
     <p class="hint">留白＝沿用左邊的中文欄名。填入你們 ERP 匯入範本的欄位名稱（例如 <code>PURCH_NO</code>、<code>ITEM_NO</code>），
-    匯出的 CSV 表頭就會用那個名字。</p>
+    匯出的 Excel 表頭就會用那個名字。</p>
     <h4 style="margin:12px 0 6px">表頭</h4>
     <div style="max-height:24vh;overflow:auto;display:grid;gap:5px">${B.PR_HEADER_FIELDS.map((f) => row('header', f)).join('')}</div>
     <h4 style="margin:12px 0 6px">明細</h4>
@@ -2253,13 +2254,31 @@ function downloadPr(no, profile) {
   const pr = state.prs.find((p) => p.no === no);
   if (!pr) return;
   const { files } = B.toErpTables(pr, profile || state.settings.erpProfile, state.settings.erpMapping || {});
-  for (const f of files) download(f.name, f.rows.map((r) => r.map(csvCell).join(',')).join('\n'));
+  // 表頭與明細改成同一個活頁簿的兩張工作表 —— ERP 匯入要的是兩張表，
+  // 但使用者要的是一個檔。兩者不衝突。
+  exportExcel(`請購單-${no}`, files.map((f) => ({
+    name: f.name.replace(/\.csv$/i, '').replace(/^.*?[-_]/, '') || f.name,
+    rows: f.rows,
+  })));
 }
 
 /* ══════════ 對話框 ══════════ */
 
+/**
+ * 全站只有一個 <dialog> 元素，換內容就是換世代。
+ *
+ * 這個計數器是為了修一個踩過三次的錯：按鈕的 fn() 如果自己開了新對話框，
+ * 舊的 close() 會緊接著執行，把剛開的那個一起關掉 —— 畫面上就是「按了沒反應」。
+ * 所以關閉要帶世代號：世代已經往前跑了，代表內容已經被別人換掉，這個關閉就作廢。
+ */
+let dlgGen = 0;
+
+/** 只關掉「當時那一個」對話框；若內容已被換成別的，就什麼都不做。 */
+function dlgClose(gen) { if (gen === undefined || gen === dlgGen) $('#dlg').close(); }
+
 function dialog(title, html, buttons = [{ label: '關閉' }], onBody) {
   const d = $('#dlg');
+  const gen = ++dlgGen;
   $('#dlgTitle').textContent = title;
   $('#dlgBody').innerHTML = html;
   const foot = $('#dlgFoot');
@@ -2268,11 +2287,12 @@ function dialog(title, html, buttons = [{ label: '關閉' }], onBody) {
     const el = document.createElement('button');
     el.className = 'btn' + (b.primary ? ' primary' : '');
     el.textContent = b.label;
-    el.onclick = () => { if (b.fn) b.fn(); d.close(); };
+    el.onclick = () => { if (b.fn) b.fn(); dlgClose(gen); };
     foot.appendChild(el);
   });
-  if (onBody) onBody($('#dlgBody'));
+  if (onBody) onBody($('#dlgBody'), gen);
   if (!d.open) d.showModal();
+  return gen;
 }
 
 function openSourceDialog(code) {
@@ -2445,9 +2465,9 @@ function openSettings() {
         if (state.analysis) runAnalysis();
         renderAll();
       },
-    }], (body) => {
-      body.querySelector('#sExportProj').onclick = () => { exportProject(); $('#dlg').close(); };
-      body.querySelector('#sImportProj').onclick = () => { $('#fileProject').click(); $('#dlg').close(); };
+    }], (body, gen) => {
+      body.querySelector('#sExportProj').onclick = () => { exportProject(); dlgClose(gen); };
+      body.querySelector('#sImportProj').onclick = () => { $('#fileProject').click(); dlgClose(gen); };
       body.querySelector('#sReset').onclick = () => {
         if (!confirm('清除所有本機修改，回到範本狀態？')) return;
         try { localStorage.removeItem(LS_KEY); } catch { /* 無 localStorage 時直接重載 */ }
@@ -2466,7 +2486,7 @@ function openHelp() {
       <li>指派量測到工項 → 成為<b>圖面量</b>，與 <b>BOQ 量</b>比對出差異。</li>
       <li>差異超標的項目會被鎖定，必須人工確認並留下簽核人與理由。</li>
       <li>套損耗率得<b>建議採購量</b>，再依訂購單位／包裝倍數／MOQ 算<b>下單量</b>。</li>
-      <li>勾選 → 右欄 → 轉採購 Package → 匯出 RFQ CSV。</li>
+      <li>勾選 → 右欄 → 轉採購 Package → 匯出 RFQ Excel。</li>
     </ol>
     <h4>快捷鍵</h4>
     <p><span class="k">Enter</span>／雙擊／右鍵 結束量測 · <span class="k">Esc</span> 取消 · <span class="k">Backspace</span> 退一點 ·
@@ -2581,18 +2601,99 @@ function suggestNeedDate(items) {
   return d.toISOString().slice(0, 10);
 }
 
-function csvCell(v) {
-  const s = v == null ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+/**
+ * 嘗試讓瀏覽器存檔。
+ *
+ * 有些宿主環境（嵌在 iframe 裡的檢視器、內嵌瀏覽器）會把頁面自己發起的下載
+ * 一律擋掉，而且**擋掉時不會拋錯**，點了就是沒反應。所以這裡永遠不假設成功，
+ * 一律另外提供「複製貼進 Excel」這條不依賴下載的路。
+ */
+function tryDownload(name, blob) {
+  try {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    return true;
+  } catch (e) { console.warn('下載被擋', e); return false; }
 }
 
-function download(name, text, mime = 'text/csv;charset=utf-8') {
-  const blob = new Blob(['﻿' + text], { type: mime });   // BOM 讓 Excel 正確判讀 UTF-8
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+/** 這個頁面是不是被嵌在別人的框裡 —— 嵌著就很可能下載會被擋。 */
+function isEmbedded() {
+  try { return window.self !== window.top; } catch { return true; }
+}
+
+/**
+ * 匯出 Excel。這是全站唯一的匯出出口。
+ *
+ * 為什麼不是 CSV：CSV 沒有編碼欄位，Excel 只能拿系統碼頁去猜，
+ * 繁體中文 Windows 會猜成 Big5，UTF-8 的中文就全變亂碼 ——
+ * 加 BOM 有時有效、有時被當成資料。.xlsx 內部是 UTF-8 XML，編碼不用猜。
+ * 而且一個檔可以放多張工作表，不必把清單、採購包、工序拆成好幾個檔。
+ *
+ * sheets = [{ name, rows }]，第一列是表頭。
+ */
+function exportExcel(baseName, sheets, opts = {}) {
+  const list = (sheets || []).filter((x) => x && x.rows && x.rows.length);
+  if (!list.length) return dialog('沒有資料', '<p>這次匯出沒有任何內容。</p>');
+  const prepared = list.map((x) => ({ ...x, widths: x.widths || XL.autoWidths(x.rows) }));
+  const file = `${baseName}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  let bytes;
+  try { bytes = XL.build(prepared); }
+  catch (e) { return dialog('匯出失敗', `<p>${esc(e.message)}</p>`); }
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const embedded = isEmbedded();
+  if (!embedded) tryDownload(file, blob);
+
+  const total = prepared.reduce((a, x) => a + x.rows.length - 1, 0);
+  const tsv = prepared.length === 1 ? XL.toTsv(prepared[0].rows) : '';
+  dialog('匯出 Excel', `
+    <p>已產生 <b>${esc(file)}</b>　${prepared.length} 張工作表、${total} 筆資料。</p>
+    <table class="mkt" style="margin:8px 0"><thead><tr><th>工作表</th><th class="n">筆數</th><th class="n">欄數</th></tr></thead>
+      <tbody>${prepared.map((x) => `<tr><td>${esc(x.name)}</td><td class="n">${x.rows.length - 1}</td>
+        <td class="n">${Math.max(...x.rows.map((r) => r.length))}</td></tr>`).join('')}</tbody></table>
+    ${embedded ? `<p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+      這個頁面是嵌在別的視窗裡開的，該環境通常會擋掉網頁自己發起的下載（點了沒反應）。
+      按下面的「下載」還是可以試；若真的沒反應，改用下面的複製貼上 —— 那條路不需要下載權限。</p>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn primary" id="xDl">下載 ${esc(file)}</button>
+      ${tsv ? '<button class="btn" id="xCopy">複製（可直接貼進 Excel）</button>' : ''}
+    </div>
+    ${tsv ? `<label class="f" style="margin-top:10px;display:block">或全選這裡複製，貼到 Excel 的 A1</label>
+      <textarea id="xTsv" readonly spellcheck="false" style="width:100%;height:160px;font-family:var(--mono);font-size:11.5px;white-space:pre;overflow:auto">${esc(tsv)}</textarea>
+      <p class="hint">貼上的是 TSV（欄位以 Tab 分隔）—— Excel 會自動分欄，而且不經過任何編碼猜測，中文不會變亂碼。</p>`
+      : '<p class="hint">多張工作表只能用下載取得；單張工作表才提供複製貼上。</p>'}`,
+    [{ label: '關閉' }], (body) => {
+      body.querySelector('#xDl').onclick = () => {
+        if (!tryDownload(file, blob)) {
+          setTimeout(() => dialog('下載被環境擋下', '<p>這個環境不允許網頁自己發起下載。請改用「複製（可直接貼進 Excel）」。</p>'), 40);
+        }
+      };
+      const cp = body.querySelector('#xCopy');
+      if (cp) cp.onclick = async () => {
+        const ta = body.querySelector('#xTsv');
+        try {
+          await navigator.clipboard.writeText(tsv);
+          cp.textContent = '已複製 ✓';
+          setTimeout(() => { cp.textContent = '複製（可直接貼進 Excel）'; }, 2000);
+        } catch {
+          ta.focus(); ta.select();
+          cp.textContent = '已選取，請按 Ctrl+C';
+        }
+      };
+    });
+}
+
+/** JSON 專案檔仍走純下載 —— 它不是給人看的，貼上沒有意義。 */
+function download(name, text, mime = 'application/json') {
+  const blob = new Blob([text], { type: mime });
+  if (!tryDownload(name, blob)) {
+    dialog('下載被環境擋下', `<p>這個環境不允許網頁自己發起下載，無法儲存 <b>${esc(name)}</b>。</p>
+      <p class="hint">請改在自己的伺服器上開這個工具，或用「匯出 Excel」那條路。</p>`);
+  }
 }
 
 function itemRow(it) {
@@ -2618,32 +2719,58 @@ const CSV_HEAD = ['WBS', '工項代碼', '名稱', '規格', '單位', '圖面�
 function openExport() {
   dialog('匯出', `
     <div style="display:grid;gap:8px">
-      <button class="btn" id="eAll">全部工項 CSV</button>
-      <button class="btn" id="eSel">已選工項 CSV</button>
-      <button class="btn" id="ePkg">所有採購包 RFQ CSV</button>
+      <button class="btn" id="eAll">全部工項 Excel</button>
+      <button class="btn" id="eSel">已選工項 Excel</button>
+      <button class="btn" id="ePkg">所有採購包 RFQ Excel（一包一張工作表）</button>
       <button class="btn" id="eJson">專案 JSON（含來源與簽核紀錄）</button>
     </div>
-    <p class="hint" style="margin-top:10px">CSV 含 UTF-8 BOM，Excel 直接開不會亂碼。
+    <p class="hint" style="margin-top:10px">匯出的是 .xlsx，內部是 UTF-8 XML，Excel 不需要猜編碼，中文不會亂碼
+    （CSV 沒有編碼欄位，繁中 Windows 會猜成 Big5，這是過去亂碼的來源）。
     匯出檔保留「判定規則、簽核人、確認理由、數量出處」四欄 —— 這四欄才是稽核時真正被問的東西。</p>`,
-    [{ label: '關閉' }], (body) => {
-      body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部'); $('#dlg').close(); };
-      body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選'); $('#dlg').close(); };
-      body.querySelector('#ePkg').onclick = () => { state.packages.forEach(exportPackageCsv); $('#dlg').close(); };
-      body.querySelector('#eJson').onclick = () => { exportProject(); $('#dlg').close(); };
+    [{ label: '關閉' }], (body, gen) => {
+      body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部'); dlgClose(gen); };
+      body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選'); dlgClose(gen); };
+      body.querySelector('#ePkg').onclick = () => { exportAllPackages(); dlgClose(gen); };
+      body.querySelector('#eJson').onclick = () => { exportProject(); dlgClose(gen); };
     });
 }
 
 function exportCsv(items, name) {
   if (!items.length) return dialog('沒有資料', '<p>清單是空的。</p>');
-  const lines = [CSV_HEAD, ...items.map(itemRow)].map((r) => r.map(csvCell).join(','));
-  download(`${name}-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
+  exportExcel(name, [{ name: '工程量清單', rows: [CSV_HEAD, ...items.map(itemRow)] }]);
+}
+
+/** 單一採購包的詢價單列 —— 抬頭三列 + 空列 + 表頭 + 明細。 */
+function packageRows(pkg) {
+  const items = pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean);
+  return [
+    ['採購包', pkg.code, pkg.name || ''],
+    ['供應商', pkg.vendor || '未定'],
+    ['需求到貨日', pkg.needDate || ''],
+    [],
+    CSV_HEAD, ...items.map(itemRow),
+  ];
 }
 
 function exportPackageCsv(pkg) {
-  const items = pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean);
-  const head = [`採購包,${pkg.code},${pkg.name || ''}`, `供應商,${pkg.vendor || '未定'}`, `需求到貨日,${pkg.needDate || ''}`, ''];
-  const lines = [CSV_HEAD, ...items.map(itemRow)].map((r) => r.map(csvCell).join(','));
-  download(`RFQ-${pkg.code}.csv`, head.concat(lines).join('\n'));
+  exportExcel(`RFQ-${pkg.code}`, [{ name: '詢價單', rows: packageRows(pkg) }]);
+}
+
+/**
+ * 全部採購包匯出成**一個**活頁簿，一個包一張工作表。
+ *
+ * 不是每個包各下載一個檔：瀏覽器對連續多次下載本來就會擋，
+ * 而且採購真正要的是「一次寄給不同廠商前先自己核對過」，分成十個檔只會更難核。
+ * 工作表名稱用採購包代碼，重名時 safeSheetName 會自動加序號。
+ */
+function exportAllPackages() {
+  if (!state.packages.length) return dialog('沒有資料', '<p>目前沒有任何採購包。</p>');
+  const used = new Set();
+  const sheets = state.packages.map((pkg) => ({
+    name: XL.safeSheetName(pkg.code || pkg.name || '採購包', used),
+    rows: packageRows(pkg),
+  }));
+  exportExcel('RFQ-全部採購包', sheets);
 }
 
 function exportProject() {
@@ -2659,7 +2786,7 @@ function exportProject() {
     tasks: state.tasks,
     selected: [...state.selected],
   };
-  download(`takeoff-project-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
+  download(`takeoff-project-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2));
 }
 
 async function importProject(file) {
@@ -3206,8 +3333,8 @@ function exportRfiCsv() {
     r.closedAt || '', (A.RFI_CLOSE_ACTIONS[r.closeAction] || {}).label || '', r.dismissReason || '',
     r.vanished ? '已消失' : '存在',
     (r.evidence || []).map((e) => `${e.label}：${e.value}（${e.from || ''}）`).join(' / '),
-  ])].map((r) => r.map(csvCell).join(','));
-  download(`RFI-${state.projName}-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'));
+  ])];
+  exportExcel(`RFI-${state.projName}`, [{ name: 'RFI', rows: lines }]);
 }
 
 // 供 e2e 測試觀察內部狀態

@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readXlsx } from './lib-zip.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../public', import.meta.url)));
 const FIX = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -97,8 +98,9 @@ ok('RFI 卡片顯示候選狀態與發問對象', firstRfi.includes('候選') &&
 ok('候選不配正式文號', !/RFI-\d/.test(firstRfi), firstRfi.slice(0, 60));
 const rfiDl = page.waitForEvent('download');
 await page.locator('#btnRfiCsv').click();
-const rfiCsv = await readFile(await (await rfiDl).path(), 'utf8');
-ok('RFI CSV 含問題內容與證據欄', rfiCsv.includes('問題內容') && rfiCsv.includes('證據'));
+const rfiXl = readXlsx(await readFile(await (await rfiDl).path()));
+ok('RFI Excel 含問題內容與證據欄', rfiXl.text.includes('問題內容') && rfiXl.text.includes('證據'));
+await closeDialog(page);
 
 await page.locator('#tabList').click();
 
@@ -274,10 +276,10 @@ ok('獨立假設會低估整包 P80', simNums.indep < simNums.port, JSON.stringi
 ok('收斂指標 < 2%', simNums.conv < 0.02, String(simNums.conv));
 const simDl = page.waitForEvent('download');
 await page.locator('#dlgFoot button').filter({ hasText: '匯出' }).click();
-const simCsv = await readFile(await (await simDl).path(), 'utf8');
-ok('模擬 CSV 含參數與逐項分位', simCsv.includes('模擬參數') && simCsv.includes('分散效益') && simCsv.includes('P80'));
-await page.waitForTimeout(200);
-if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').first().click();
+const simXl = readXlsx(await readFile(await (await simDl).path()));
+ok('模擬 Excel 含參數與逐項分位',
+  simXl.text.includes('模擬參數') && simXl.text.includes('分散效益') && simXl.text.includes('P80'));
+await closeDialog(page);
 
 console.log('\n【6d】關閉機率模式回到你現有報表的數字');
 await page.locator('#btnSettings').click();
@@ -400,10 +402,14 @@ ok('採購包顯示金額', /NT\$/.test(pkgTxt), pkgTxt.replace(/\s+/g, ' ').sli
 const dl = page.waitForEvent('download');
 await page.locator('#btnExport').click();
 await page.locator('#eSel').click();
-const file = await dl;
-const csv = await readFile(await file.path(), 'utf8');
-ok('CSV 含表頭與稽核欄', csv.includes('正式採購基準') && csv.includes('判定規則') && csv.includes('數量出處'));
-ok('CSV 含 P80 建議採購量（全精度）', csv.includes('1777.1'), (csv.split('\n')[1] || '').slice(0, 120));
+const xl = readXlsx(await readFile(await (await dl).path()));
+ok('匯出的是單張工作表的活頁簿', xl.sheets.length === 1, String(xl.sheets.length));
+const head = xl.sheets[0].rows[0];
+ok('Excel 含表頭與稽核欄',
+  ['正式採購基準', '判定規則', '數量出處', '確認理由'].every((h) => head.includes(h)), head.join('|').slice(0, 160));
+ok('Excel 含 P80 建議採購量（全精度）', xl.text.includes('1777.1'), (xl.sheets[0].rows[1] || []).join(',').slice(0, 140));
+ok('中文沒有亂碼', xl.text.includes('低壓電力電纜'), xl.text.slice(0, 80));
+await closeDialog(page);   // 匯出對話框現在會留著（多一條複製貼上的路）
 
 console.log('\n【7b】合約型態與計價影響');
 const payTxt = await page.locator('tr[data-code="620.01"] .pay').innerText();
@@ -514,11 +520,12 @@ await page.waitForSelector('#dlg[open]');
 await page.waitForTimeout(250);
 const dlPr = page.waitForEvent('download');
 await page.locator('#dlgFoot button.primary').click();
-const headerCsv = await readFile(await (await dlPr).path(), 'utf8');
-ok('ERP CSV 套用自訂欄名', headerCsv.includes('PURCH_NO'), headerCsv.split('\n')[0].slice(0, 80));
-ok('ERP CSV 帶出 PR 單號', headerCsv.includes(pr.no));
-await page.waitForTimeout(300);
-if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').first().click();
+const prXl = readXlsx(await readFile(await (await dlPr).path()));
+ok('ERP Excel 表頭與明細分成兩張工作表', prXl.sheets.length === 2,
+  prXl.sheets.map((x) => x.name).join('|'));
+ok('ERP Excel 套用自訂欄名', prXl.text.includes('PURCH_NO'), prXl.sheets[0].rows[0].join('|').slice(0, 100));
+ok('ERP Excel 帶出 PR 單號', prXl.text.includes(pr.no));
+await closeDialog(page);
 
 console.log('\n【7e】施工工序');
 await page.locator('#tabSeq').click();
@@ -628,9 +635,13 @@ if (matTxt.includes('最早可行開工日')) {
 
 const seqDl = page.waitForEvent('download');
 await page.locator('#btnSeqCsv').click();
-const seqCsv = await readFile(await (await seqDl).path(), 'utf8');
-ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seqCsv.includes('可信度') && seqCsv.includes('浮時'));
-ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
+const seqXl = readXlsx(await readFile(await (await seqDl).path()));
+const seqHead = seqXl.sheets[0].rows[0];
+ok('工序 Excel 含十六欄與排程欄',
+  seqHead.includes('SequenceCode') && seqXl.text.includes('可信度') && seqXl.text.includes('浮時'),
+  seqHead.join('|').slice(0, 160));
+ok('工序 Excel 標示建議工序', seqXl.text.includes('建議工序／需工程確認'));
+await closeDialog(page);
 await page.waitForTimeout(400);
 
 console.log('\n【6之三】掃描圖與不按比例的圖');
@@ -990,6 +1001,68 @@ ok('曝險 + 固定 + 量不出來 = 總額',
   Math.abs(expo.exposed + expo.fixed + expo.uncovered - expo.amount) < 0.01, JSON.stringify(expo));
 ok('不鏽鋼金額列入「量不出來」而非「固定」', expo.uncovered > 0 && expo.n >= 1, JSON.stringify(expo));
 
+console.log('\n【7之四】匯出 Excel');
+// 這一節的起因：使用者按了匯出，畫面跳出「此物品不提供文件下載」。
+// 有兩件事同時是壞的 ——
+//   (1) 匯出的是 CSV，繁中 Windows 的 Excel 會用 Big5 猜 UTF-8，中文變亂碼；
+//   (2) 對話框框架在按鈕的 fn() 跑完後無條件 close()，
+//       fn() 若自己開了新對話框，就會被緊接著關掉 —— 按了完全沒反應。
+await page.locator('#tabList').click();
+await page.waitForTimeout(150);
+await page.evaluate(() => { window.__takeoff.state.selected = new Set(); window.__takeoff.renderAll(); });
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+const allDl = page.waitForEvent('download');
+await page.locator('#eAll').click();
+await page.waitForTimeout(400);
+ok('匯出後對話框仍然開著（不會按了沒反應）', await page.locator('#dlg[open]').count() === 1);
+ok('對話框提供下載按鈕', await page.locator('#xDl').isVisible());
+const allXl = readXlsx(await readFile(await (await allDl).path()));
+ok('全部工項都在活頁簿裡',
+  allXl.sheets[0].rows.length - 1 === await page.evaluate(() => window.__takeoff.state.items.length),
+  `${allXl.sheets[0].rows.length - 1} 列`);
+ok('工作表名稱是中文且未被截斷', allXl.sheets[0].name === '工程量清單', allXl.sheets[0].name);
+
+// 不能下載時的後備：TSV 貼上。這條路不需要任何下載權限。
+const tsv = await page.evaluate(() => document.querySelector('#xTsv')?.value || '');
+ok('提供可貼進 Excel 的 TSV 後備', tsv.length > 100, `${tsv.length} 字元`);
+const tsvHead = tsv.split('\n')[0].split('\t');
+ok('TSV 欄數與活頁簿一致', tsvHead.length === allXl.sheets[0].rows[0].length,
+  `TSV ${tsvHead.length} / XLSX ${allXl.sheets[0].rows[0].length}`);
+ok('TSV 中文未亂碼', tsv.includes('低壓電力電纜'));
+await closeDialog(page);
+
+// 空選取要明講，不可以默默產出一個零列的檔
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+await page.locator('#eSel').click();
+await page.waitForTimeout(300);
+ok('沒有選任何工項時明說沒有資料',
+  (await page.locator('#dlgTitle').innerText()).includes('沒有資料'),
+  await page.locator('#dlgTitle').innerText());
+await closeDialog(page);
+
+// 所有採購包 = 一個活頁簿、一包一張工作表。
+// 不是一包下載一個檔：瀏覽器對連續多次下載本來就會擋，而且採購要的是一次核對得完。
+const pkgCountBefore = await page.evaluate(() => window.__takeoff.state.packages.length);
+ok('此時有多個採購包（否則這一段驗不到多工作表）', pkgCountBefore > 1, String(pkgCountBefore));
+const pkgDl = page.waitForEvent('download');
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+await page.locator('#ePkg').click();
+const pkgXl = readXlsx(await readFile(await (await pkgDl).path()));
+const pkgCount = await page.evaluate(() => window.__takeoff.state.packages.length);
+ok('所有採購包匯成一個活頁簿、一包一張工作表', pkgXl.sheets.length === pkgCount,
+  `${pkgXl.sheets.length} 張 / ${pkgCount} 包`);
+ok('工作表名稱不重複（重複會讓活頁簿打不開）',
+  new Set(pkgXl.sheets.map((x) => x.name)).size === pkgXl.sheets.length,
+  pkgXl.sheets.map((x) => x.name).join('|'));
+ok('每張詢價單都帶採購包抬頭', pkgXl.sheets.every((x) => x.rows[0][0] === '採購包'),
+  JSON.stringify(pkgXl.sheets.map((x) => x.rows[0])));
+ok('多張工作表時不提供 TSV（貼上只會貼到一張）',
+  await page.locator('#xTsv').count() === 0);
+await closeDialog(page);
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
@@ -1015,6 +1088,22 @@ await browser.close();
 server.close();
 console.log(`\n通過 ${pass} 項，失敗 ${fail} 項`);
 process.exit(fail ? 1 : 0);
+
+
+/**
+ * 關掉目前開著的對話框。
+ *
+ * 匯出改成 .xlsx 之後，按下匯出不再是「下載完就結束」：對話框會留著，
+ * 因為有些環境（例如把頁面嵌在別人框裡）會擋掉網頁自己發起的下載，
+ * 那時候唯一能用的是對話框裡的「複製貼進 Excel」。測試要跟著把它關掉。
+ */
+async function closeDialog(pg, times = 3) {
+  for (let i = 0; i < times; i++) {
+    if (!(await pg.locator('#dlg[open]').count())) return;
+    await pg.locator('#dlgFoot button').first().click();
+    await pg.waitForTimeout(120);
+  }
+}
 
 /** 依 viewer 目前的視圖轉換，把 world 座標換成畫布上的像素座標再點下去。 */
 async function clickWorld(pg, wx, wy) {
