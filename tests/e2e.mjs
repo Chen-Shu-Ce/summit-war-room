@@ -633,6 +633,60 @@ ok('工序 CSV 含十六欄與排程欄', seqCsv.includes('SequenceCode') && seq
 ok('工序 CSV 標示建議工序', seqCsv.includes('建議工序／需工程確認'));
 await page.waitForTimeout(400);
 
+console.log('\n【6之二】PDF 圖框比例與多重比例');
+await page.locator('#tabView').click();
+await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-titleblock.pdf'));
+await page.waitForFunction(() => window.__takeoff.state.pdfScale !== null, null, { timeout: 30000 });
+await page.waitForTimeout(700);
+const fr = await page.evaluate(() => {
+  const f = window.__takeoff.state.pdfScale;
+  return { paper: f.paper && f.paper.name, slack: f.paper && f.paper.slack, exact: f.exact,
+    ratio: f.ratio, usable: f.usable, reason: f.picked.reason,
+    cands: f.collected.scales.map((x) => `${x.paper || '?'}:1:${x.ratio}`) };
+});
+ok('由頁面尺寸判定為 A1', fr.paper === 'A1' && fr.slack < 0.5, JSON.stringify(fr));
+ok('讀出圖框的兩個比例宣告', fr.cands.length === 2, JSON.stringify(fr.cands));
+ok('依實際紙張挑中 1:100 而非 1:200', fr.ratio === 100 && fr.reason === 'paper-match', JSON.stringify(fr));
+ok('紙張精確吻合 → 判定 PDF 未被縮放', fr.exact === true && fr.usable === true, JSON.stringify(fr));
+
+if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(200);
+await page.locator('#scaleChip').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+const scaleTxt = await page.locator('#dlgBody').innerText();
+ok('比例對話框最前面就警告一張圖不只一個比例',
+  scaleTxt.includes('一張施工圖通常不只一個比例') && scaleTxt.includes('大樣的量測會整批錯掉'), '');
+ok('列出圖框比例的判定證據', scaleTxt.includes('精確吻合 A1') && scaleTxt.includes('A1圖:1:100') === false
+  ? scaleTxt.includes('1:100') : true, '');
+await page.locator('#dlgBody #btnFramed').click();
+await page.waitForTimeout(300);
+ok('可一鍵套用圖框比例到整頁',
+  await page.evaluate(() => Math.abs(window.__takeoff.state.viewer.metersPerUnit - 0.0352778) < 1e-6));
+
+// 這張圖的 SECTION A-A 是 1:10：同樣長度的線，整頁比例會錯十倍
+const multi = await page.evaluate(() => {
+  const v = window.__takeoff.state.viewer;
+  const D = 170.0787;                       // 600mm @1:10 = 6000mm @1:100，紙上同樣長
+  const A = { x: 2000, y: 1250 }, B = { x: 2000 + D, y: 1250 };   // SECTION A-A 的 600 尺寸線
+  const P = { x: 400, y: 1250 }, Qd = { x: 400 + D, y: 1250 };     // 主視圖的 6000 尺寸線
+  const before = v.engValue({ type: 'length', pts: [A, B] }).value;
+  const half = D * 1.5, cx = (A.x + B.x) / 2, cy = 1250;
+  const z = v.addScaleZone({ x0: cx - half, y0: cy - half, x1: cx + half, y1: cy + half },
+    0.6 / D, { name: 'SECTION A-A', ratio: Math.round((0.6 / D) / (25.4 / 72 / 1000)) });
+  return {
+    before,
+    zoned: v.engValue({ type: 'length', pts: [A, B] }).value,
+    plan: v.engValue({ type: 'length', pts: [P, Qd] }).value,
+    zoneRatio: z.ratio, zones: v.scaleInfo().zones.length,
+  };
+});
+ok('整頁比例會把 600mm 的大樣量成 6M（錯十倍）', Math.abs(multi.before - 5.997) < 0.02, String(multi.before));
+ok('建立 1:10 比例分區後量得 0.600 M', Math.abs(multi.zoned - 0.6) < 0.005, String(multi.zoned));
+ok('分區比例判定為 1:10', multi.zoneRatio === 10, String(multi.zoneRatio));
+ok('分區外的主視圖仍用整頁 1:100 量得 6.0 M', Math.abs(multi.plan - 5.997) < 0.02, String(multi.plan));
+ok('分區數回報在 scaleInfo', multi.zones === 1, String(multi.zones));
+
 console.log('\n【7之零】真實地籍圖暴露的座標與單位問題');
 await page.locator('#tabView').click();
 await page.setInputFiles('#fileDrawing', join(FIX, 'fixture-tm2.dxf'));

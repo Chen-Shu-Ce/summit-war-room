@@ -17,6 +17,7 @@ import * as CS from './calcsheet.js';
 import * as ENC from './encoding.js';
 import * as U from './units.js';
 import * as SV from './survey.js';
+import * as PS from './pdfscale.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -59,6 +60,7 @@ const state = {
   calc: null,          // 圖面計算式表的解析與驗算結果
   encoding: null,      // 最近一次 DXF 的編碼偵測結果
   survey: null,        // 座標與單位合理性檢查
+  pdfScale: null,      // 從 PDF 圖框讀到的比例宣告
   surveyFixed: null,   // 使用者確認過的單位修正
 };
 
@@ -754,7 +756,9 @@ async function loadPdfFile(file) {
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
   state.drawing = { name: file.name, kind: 'pdf', pdf, pageNo: 1, pages: pdf.numPages };
   await state.viewer.loadPdf(pdf, 1);
-  $('#drawName').textContent = `${file.name} · ${pdf.numPages} 頁`;
+  await readFramedScale(pdf, 1);
+  $('#drawName').textContent = `${file.name} · ${pdf.numPages} 頁`
+    + (state.pdfScale && state.pdfScale.paper ? ` · ${state.pdfScale.paper.name}` : '');
   const chip = $('#pageChip');
   chip.hidden = false;
   chip.innerHTML = `第 <b>1</b>/${pdf.numPages} 頁`;
@@ -764,6 +768,7 @@ async function loadPdfFile(file) {
     if (!n || n < 1 || n > pdf.numPages) return;
     state.drawing.pageNo = n;
     await state.viewer.loadPdf(pdf, n);
+    await readFramedScale(pdf, n);
     chip.innerHTML = `第 <b>${n}</b>/${pdf.numPages} 頁`;
     updateScaleChip(); renderMeasureList();
   };
@@ -846,22 +851,71 @@ function bindViewer(v) {
   v.on('measure', () => renderMeasureList());
   v.on('measure-change', () => renderMeasureList());
   v.on('scale', () => updateScaleChip());
-  v.on('calib-request', ({ dUnits }) => {
+  v.on('calib-request', ({ dUnits, measurement }) => {
+    const isPdf = v.mode === 'pdf';
+    // 整頁還沒有比例時，第一次校正應該先把整頁定下來 ——
+    // 只建分區會讓分區以外的圖全部量不出數字，那比套錯比例更沒用。
+    const hasPageScale = !!v.metersPerUnit;
     dialog('比例校正', `
       <p>已在圖上量到 <b class="num">${dUnits.toFixed(2)}</b> 個圖面單位。請輸入這段的實際長度：</p>
       <div class="fgrid">
         <div><label class="f">實際長度</label><input type="number" id="calLen" step="0.001" min="0" value="1"></div>
         <div><label class="f">單位</label><select id="calUnit"><option value="1">公尺 m</option><option value="0.001">公厘 mm</option><option value="0.01">公分 cm</option><option value="0.3048">英呎 ft</option></select></div>
       </div>
+      ${isPdf ? `<div class="fgrid" style="margin-top:4px">
+        <div style="grid-column:1/-1"><label class="f">這次校正的適用範圍</label>
+        <select id="calScope">
+          ${hasPageScale
+            ? '<option value="zone">只套用在這一區（建議）</option><option value="page">套用到整頁</option>'
+            : '<option value="page">套用到整頁（這頁還沒有比例）</option><option value="zone">只套用在這一區</option>'}
+        </select></div>
+        <div style="grid-column:1/-1"><label class="f">分區名稱</label>
+        <input type="text" id="calName" placeholder="例如 SECTION A-A" value="分區 ${v.scaleZones.length + 1}"></div>
+      </div>
+      <p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        <b>一張施工圖通常不只一個比例。</b>圖框 1:100、大樣 1:10 是常態。
+        ${hasPageScale
+          ? '「只套用在這一區」會以這次校正的兩點為中心建立一個比例分區，之後在該區內的量測自動用這個比例；區外仍用整頁比例。選「整頁」會把大樣的比例套到平面上去，那會整批錯。'
+          : '這一頁目前完全沒有比例，所以先用這次校正把整頁定下來。之後要量大樣時，再對那一區單獨校正並選「只套用在這一區」。'}</p>` : ''}
       <p class="hint">可重複校正多段已知尺寸：兩段以上會改用最小平方求比例，並回報 RMS 殘差 —— 殘差就是這份圖「量得準不準」的客觀證據。</p>`,
       [{ label: '取消' }, {
         label: '套用', primary: true, fn: () => {
           const len = parseFloat($('#calLen').value) * parseFloat($('#calUnit').value);
+          if (!(len > 0)) return;
+          const scope = $('#calScope') ? $('#calScope').value : 'page';
+          if (scope === 'zone' && measurement && measurement.pts && measurement.pts.length >= 2) {
+            const z = v.addScaleZone(zoneRectFor(measurement, v), len / dUnits, {
+              name: ($('#calName') && $('#calName').value.trim()) || undefined,
+              method: 'two-point',
+              ratio: v.mode === 'pdf' ? Math.round((len / dUnits) / (25.4 / 72 / 1000)) : null,
+            });
+            renderMeasureList(); updateScaleChip();
+            if (z) setTimeout(() => dialog('已建立比例分區', `
+              <p>「${esc(z.name)}」比例 <b>1:${z.ratio ?? '—'}</b>，只作用在這一區。</p>
+              <p class="hint">在這個範圍內的量測會自動採用這個比例，範圍外仍用整頁比例。
+              這正是大樣與平面同在一張圖時該有的做法 —— 整張套一個比例會讓其中一邊整批錯掉。</p>`), 60);
+            return;
+          }
           const info = v.addCalibration(dUnits, len);
           if (info) applyCalibrationToItems(info);
         },
       }]);
   });
+
+/**
+ * 由校正的兩點推出分區範圍。
+ *
+ * 以兩點為中心向外擴張 —— 一個視圖的範圍一定比它內部任何一條標註尺寸大。
+ * 擴張倍率保守取 3 倍，寧可小一點讓使用者再校正一次，也不要大到蓋掉隔壁的視圖。
+ */
+function zoneRectFor(m, v) {
+  const pts = m.pts;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const half = Math.max(Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)), 1) * 1.5;
+  return { x0: cx - half, y0: cy - half, x1: cx + half, y1: cy + half };
+}
 }
 
 function applyCalibrationToItems(info) {
@@ -887,22 +941,73 @@ function updateScaleChip() {
 function openScaleDialog(firstTime = false) {
   const v = state.viewer;
   if (!v.mode) return dialog('尚未載入圖面', '<p>請先載入 DWG／DXF／PDF。</p>');
+  const fr = state.pdfScale;
   dialog('設定圖面比例', `
     ${firstTime ? '<p class="chip bad" style="display:block;padding:7px 10px">PDF 沒有真實尺寸資訊。未設定比例前，所有量測值都不會換算成工程單位。</p>' : ''}
-    <h4>方法一：實測校正（建議）</h4>
-    <p>選「比例校正」工具，在圖上點兩點已知尺寸（例如標註的柱距），輸入實際長度。重複 2 段以上可取得 RMS 殘差。</p>
-    <h4>方法二：圖框標註比例</h4>
+    ${multiScaleWarning()}
+    ${fr ? framedScaleBlock(fr) : ''}
+    <h4 style="margin-top:14px">方法一：實測校正（建議，且是唯一對大樣有效的方法）</h4>
+    <p>選「比例校正」工具，在圖上點兩點已知尺寸（例如標註的 600），輸入實際長度。重複 2 段以上可取得 RMS 殘差。</p>
+    <h4 style="margin-top:12px">方法二：手動輸入比例</h4>
     <div class="fgrid">
       <div><label class="f">比例 1 : N</label><input type="number" id="ratioN" min="1" step="1" value="${v.scaleInfo().ratio || 100}"></div>
-      <div style="align-self:end"><button class="btn" id="btnRatio">套用</button></div>
+      <div style="align-self:end"><button class="btn" id="btnRatio">套用到整頁</button></div>
     </div>
     <p class="hint">此法假設 PDF 由 CAD 以 1:1 圖紙尺寸輸出且未經縮放列印。實務上常見「A1 圖縮印成 A3」而失真，
     所以本工具在可信度評分中對這個方法扣分。</p>`, [{ label: '關閉' }], (body) => {
     body.querySelector('#btnRatio').onclick = () => {
       const n = parseInt(body.querySelector('#ratioN').value, 10);
-      v.setDeclaredScale(n); updateScaleChip(); $('#dlg').close();
+      v.setDeclaredScale(n); updateScaleChip(); renderMeasureList(); $('#dlg').close();
+    };
+    const b = body.querySelector('#btnFramed');
+    if (b) b.onclick = () => {
+      v.setDeclaredScale(fr.ratio); updateScaleChip(); renderMeasureList(); $('#dlg').close();
     };
   });
+}
+
+/**
+ * 一張施工圖同時有好幾個比例，這件事必須放在最前面講。
+ *
+ * 實測案例：一張 A1 圖，圖框寫「A1圖:1:100」，但 SECTION A-A 的 600mm 尺寸線
+ * 在紙上是 59.97mm —— 那一區實際是 1:10。整張套圖框比例，大樣的量測會錯 10 倍，
+ * 而且畫面上完全正常，沒有任何跡象。
+ */
+/**
+ * 讀圖框的比例宣告。
+ *
+ * 真實施工圖常把尺寸標註轉成曲線，pdf.js 只抽得到圖框那幾行字 ——
+ * 但比例欄剛好在那幾行裡，所以這一步還是值得做。
+ * 讀到的只是候選，永遠不自動套用。
+ */
+async function readFramedScale(pdf, pageNo) {
+  state.pdfScale = null;
+  try {
+    const page = await pdf.getPage(pageNo);
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    const strings = tc.items.map((i) => i.str).filter((x) => x && x.trim());
+    state.pdfScale = PS.analyze(vp.width, vp.height, strings);
+  } catch (e) { console.warn('讀不到圖框比例', e); }
+}
+
+function multiScaleWarning() {
+  return `<p class="chip bad" style="display:block;padding:9px 11px;white-space:normal;line-height:1.6">
+    <b>一張施工圖通常不只一個比例。</b>圖框標的比例只適用主要視圖；
+    SECTION、大樣、詳圖幾乎都有自己的比例（常見 1:10、1:20、1:50）。
+    <b>整張套同一個比例，大樣的量測會整批錯掉，而且畫面上看不出來。</b>
+    量大樣之前請用「比例校正」對那一區單獨校正 —— 校正會建立一個只作用在該區域的比例分區。</p>`;
+}
+
+/** 從圖框讀到的比例。只當候選，不自動套。 */
+function framedScaleBlock(fr) {
+  return `<h4 style="margin-top:12px">從圖框讀到的比例</h4>
+    ${fr.evidence.map((e) => `<p class="chip ${e.level === 'bad' ? 'bad' : e.level === 'ok' ? 'ok' : 'warn'}"
+      style="display:block;padding:7px 10px;white-space:normal">${esc(e.msg)}</p>`).join('')}
+    ${fr.ratio ? `<div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <button class="btn ${fr.usable ? 'primary' : ''}" id="btnFramed">套用 1:${fr.ratio} 到整頁</button>
+      <span class="hint">1 pt = ${Q.fmt(fr.metersPerPoint, 6)} M${fr.usable ? '' : '　（證據不足，套用前請先以實測校正驗證）'}</span>
+    </div>` : ''}`;
 }
 
 function renderMeasureList() {
@@ -3051,4 +3156,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

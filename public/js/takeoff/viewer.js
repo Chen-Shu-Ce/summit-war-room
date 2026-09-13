@@ -42,8 +42,11 @@ export class Viewer {
     this.active = null;                // 進行中的量測 { type, pts }
     this.measurements = [];
     this.calibrations = [];            // [{ dPt, realM }]
-    this.metersPerUnit = null;         // world 單位 → 公尺
+    this.metersPerUnit = null;         // world 單位 → 公尺（整頁預設）
     this.scaleMethod = 'none';         // none | two-point | vector-rms | declared-scale | native
+    // 分區比例：一張施工圖常同時有平面 1:100 與大樣 1:10，
+    // 整張套同一個比例會讓大樣的量測整批錯 10 倍，而且完全看不出來。
+    this.scaleZones = [];              // [{ id, name, rect:{x0,y0,x1,y1}, metersPerUnit, method, ratio, rms }]
     this.snap = true;
     this.ortho = false;
     this.hover = null;
@@ -74,6 +77,7 @@ export class Viewer {
     this.metersPerUnit = toM || null;
     this.scaleMethod = toM ? 'native' : 'none';
     this.calibrations = [];
+    this.scaleZones = [];
     this.fit();
     this.emit('loaded', { mode: 'dxf' });
   }
@@ -91,6 +95,7 @@ export class Viewer {
     this.metersPerUnit = null;
     this.scaleMethod = 'none';
     this.calibrations = [];
+    this.scaleZones = [];
     this.fit();
     await this.ensureRaster();
     this.render();
@@ -287,16 +292,70 @@ export class Viewer {
     }
   }
 
+  /** 這個點落在哪個比例分區。沒有分區就回 null，用整頁預設。 */
+  zoneAt(p) {
+    if (!p || !this.scaleZones.length) return null;
+    for (let i = this.scaleZones.length - 1; i >= 0; i--) {
+      const z = this.scaleZones[i], r = z.rect;
+      if (p.x >= Math.min(r.x0, r.x1) && p.x <= Math.max(r.x0, r.x1)
+        && p.y >= Math.min(r.y0, r.y1) && p.y <= Math.max(r.y0, r.y1)) return z;
+    }
+    return null;
+  }
+
+  /** 這筆量測該用哪個比例。以量測的第一個點決定分區。 */
+  scaleFor(m) {
+    const pts = (m && m.pts) || [];
+    const z = this.zoneAt(pts[0]);
+    if (z && z.metersPerUnit > 0) return { s: z.metersPerUnit, zone: z };
+    return { s: this.metersPerUnit, zone: null };
+  }
+
   /** 換算為工程單位：長度→m、面積→m²、角度→度、計數→個。 */
   engValue(m) {
     const raw = this.rawValue(m);
     if (m.type === 'count') return { value: raw, unit: '個' };
     if (m.type === 'angle') return { value: raw, unit: '°' };
-    const s = this.metersPerUnit;
-    if (!s) return { value: null, unit: null, raw };
-    if (m.type === 'area' || m.type === 'rect') return { value: raw * s * s, unit: 'M2' };
-    return { value: raw * s, unit: 'M' };
+    const { s, zone } = this.scaleFor(m);
+    if (!s) return { value: null, unit: null, raw, zone: null };
+    if (m.type === 'area' || m.type === 'rect') return { value: raw * s * s, unit: 'M2', zone };
+    return { value: raw * s, unit: 'M', zone };
   }
+
+  /* ── 分區比例 ── */
+
+  /**
+   * 新增一個比例分區。
+   *
+   * 真實施工圖的常態：同一張 A1 圖，圖框寫 1:100，但 SECTION A-A 是 1:10。
+   * 整張套一個比例，大樣的量測會整批錯 10 倍 —— 而且畫面上完全正常。
+   */
+  addScaleZone(rect, metersPerUnit, meta = {}) {
+    if (!rect || !(metersPerUnit > 0)) return null;
+    const z = {
+      id: 'z' + Math.random().toString(36).slice(2, 8),
+      name: meta.name || `分區 ${this.scaleZones.length + 1}`,
+      rect, metersPerUnit,
+      method: meta.method || 'two-point',
+      ratio: meta.ratio ?? null, rms: meta.rms ?? null,
+      at: new Date().toISOString(),
+    };
+    this.scaleZones.push(z);
+    this.render();
+    this.emit('scale', this.scaleInfo());
+    return z;
+  }
+
+  removeScaleZone(id) {
+    const i = this.scaleZones.findIndex((z) => z.id === id);
+    if (i < 0) return false;
+    this.scaleZones.splice(i, 1);
+    this.render();
+    this.emit('scale', this.scaleInfo());
+    return true;
+  }
+
+  clearScaleZones() { this.scaleZones = []; this.render(); this.emit('scale', this.scaleInfo()); }
 
   label(m) {
     const e = this.engValue(m);
@@ -356,6 +415,7 @@ export class Viewer {
       rms: this.calibrationRms ?? null,
       points: this.calibrations.length,
       ratio: this.mode === 'pdf' && this.metersPerUnit ? Math.round(this.metersPerUnit / PT_TO_M) : null,
+      zones: this.scaleZones.map((z) => ({ id: z.id, name: z.name, ratio: z.ratio, method: z.method })),
     };
   }
 
