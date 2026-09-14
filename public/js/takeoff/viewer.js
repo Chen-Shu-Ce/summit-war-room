@@ -80,6 +80,10 @@ export class Viewer {
     this.scaleMethod = toM ? 'native' : 'none';
     this.calibrations = [];
     this.scaleZones = [];
+    // 不按比例是「上一張圖」的性質，不可以跟著帶到下一張 ——
+    // 忘了重設，新圖就會被永久判定為不能量測，而畫面上完全看不出原因。
+    this.notToScale = false;
+    this.notToScaleWhy = '';
     this.fit();
     this.emit('loaded', { mode: 'dxf' });
   }
@@ -98,6 +102,8 @@ export class Viewer {
     this.scaleMethod = 'none';
     this.calibrations = [];
     this.scaleZones = [];
+    this.notToScale = false;
+    this.notToScaleWhy = '';
     this.fit();
     await this.ensureRaster();
     this.render();

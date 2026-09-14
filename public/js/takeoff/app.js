@@ -63,6 +63,9 @@ const state = {
   survey: null,        // 座標與單位合理性檢查
   pdfScale: null,      // 從 PDF 圖框讀到的比例宣告
   surveyFixed: null,   // 使用者確認過的單位修正
+  drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
+  measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
+  measureKey: '',      // 目前顯示的是哪一組量測
 };
 
 /* ══════════ 啟動 ══════════ */
@@ -157,7 +160,7 @@ function persist() {
         code: i.code, qty: i.qty, wasteRate: i.wasteRate, basisOverride: i.basisOverride,
         unitPrice: i.unitPrice, order: i.order, manualBy: i.manualBy, manualNote: i.manualNote,
         provenance: i.provenance, drawingSource: i.drawingSource, layerMapped: i.layerMapped,
-        calcSource: i.calcSource, calcIssues: i.calcIssues,
+        calcSource: i.calcSource, calcIssues: i.calcIssues, drawingStale: i.drawingStale,
         coverage: i.coverage, calibration: i.calibration, calibrationRms: i.calibrationRms,
         packageId: i.packageId, closed: i.closed,
       })),
@@ -165,6 +168,7 @@ function persist() {
       projName: state.projName, scope: state.scope, rfiLog: state.rfiLog,
       baselines: state.baselines, prs: state.prs,
       tasks: state.tasks, seqStart: state.seqStart, priceBase: state.priceBase,
+      drawingSigs: state.drawingSigs,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -197,6 +201,7 @@ function restore() {
     state.tasks = d.tasks || [];
     state.seqStart = d.seqStart || '';
     state.priceBase = d.priceBase || null;
+    state.drawingSigs = d.drawingSigs || {};
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -305,7 +310,8 @@ function renderTable() {
       <td><input type="checkbox" data-pick="${esc(it.code)}" ${sel ? 'checked' : ''} style="width:auto"></td>
       <td class="nm2"><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.spec || '')}</small></td>
       <td>${esc(it.unit)}</td>
-      <td class="num"><button class="srcbtn" data-src="${esc(it.code)}">${Q.fmt(it.qty.drawing, 2)}</button></td>
+      <td class="num"><button class="srcbtn" data-src="${esc(it.code)}">${Q.fmt(it.qty.drawing, 2)}</button>${
+        it.drawingStale && Q.isNum(it.qty.drawing) ? '<span class="chip warn" title="這個數字是這張圖的上一版算出來的，圖已改版">舊版</span>' : ''}</td>
       <td class="num">${Q.fmt(it.qty.boq, 2)}</td>
       <td class="num">${varianceCell(it)}</td>
       <td><button class="srcbtn" data-basis="${esc(it.code)}">${esc(basisLabel)}</button> ${statusChip}</td>
@@ -528,6 +534,7 @@ function wire() {
   $('#btnSim').onclick = openPortfolioSim;
   $('#btnMarket').onclick = openMarket;
   $('#calcChip').onclick = openCalcSheet;
+  $('#btnDrawReset').onclick = openDrawingReset;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -698,10 +705,16 @@ async function loadDrawing(file) {
   setMidTab('view');
   $('#drawName').textContent = `載入中… ${name}`;
   try {
-    if (ext === 'pdf') await loadPdfFile(file);
-    else if (ext === 'dxf') await loadDxfFile(file);
-    else if (ext === 'dwg') await loadDwgFile(file);
+    // 檔案只讀一次。簽章在這裡算好往下傳，三條載入路徑共用同一個版本判斷。
+    const buf = await file.arrayBuffer();
+    const sig = fileSig(buf);
+    const rev = registerDrawing(name, sig);
+    if (ext === 'pdf') await loadPdfFile(file, buf, sig);
+    else if (ext === 'dxf') await loadDxfFile(file, buf, sig);
+    else if (ext === 'dwg') await loadDwgFile(file, buf, sig);
     else throw new Error('僅支援 DWG / DXF / PDF');
+    persist();
+    if (rev.revised && rev.affected.length) announceRevision(name, rev.affected);
   } catch (e) {
     console.error(e);
     $('#drawName').textContent = '載入失敗';
@@ -709,8 +722,7 @@ async function loadDrawing(file) {
   }
 }
 
-async function loadDxfFile(file) {
-  const buf = await file.arrayBuffer();
+async function loadDxfFile(file, buf, sig) {
   if (DXF.isBinaryDxf(buf)) throw new Error('這是二進位 DXF。請在 CAD 另存為「ASCII DXF」後再匯入。');
   // 台灣的 DXF 幾乎都是 Big5。寫死 UTF-8 會把每個中文字變成 U+FFFD ——
   // 畫面上就是那一整排 ????，而且看起來跟「缺字型」一模一樣。
@@ -718,8 +730,9 @@ async function loadDxfFile(file) {
   state.encoding = enc;
   const doc = DXF.parseDxf(enc.text);
   if (!doc.entities.length) throw new Error('DXF 中找不到可用實體（模型空間為空或版本過舊）。');
-  state.drawing = { name: file.name, kind: 'dxf', doc };
+  state.drawing = { name: file.name, kind: 'dxf', doc, sig };
   state.viewer.loadDxf(doc);
+  switchMeasureContext(measureKeyOf(file.name, sig, 1));
   $('#drawName').textContent = `${file.name} · ${doc.entities.length} 實體 · 單位 ${doc.units.name} · ${enc.encoding}`;
   // 只在真的有風險時打斷使用者：解出無法辨識的字，或檔頭宣告被推翻。
   // 乾淨的推測不需要跳視窗嚇人 —— 用什麼編碼解的已經寫在狀態列了。
@@ -750,13 +763,17 @@ async function loadDxfFile(file) {
   }
 }
 
-async function loadPdfFile(file) {
+async function loadPdfFile(file, buf, sig) {
   const pdfjs = await import('../../vendor/pdfjs/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = new URL('../../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
-  const buf = await file.arrayBuffer();
-  const pdf = await pdfjs.getDocument({ data: buf }).promise;
-  state.drawing = { name: file.name, kind: 'pdf', pdf, pageNo: 1, pages: pdf.numPages };
+  // pdf.js 會接管這塊 buffer，先複製一份給它，原本那份留著算簽章與重載
+  const pdf = await pdfjs.getDocument({ data: buf.slice(0) }).promise;
+  state.drawing = { name: file.name, kind: 'pdf', pdf, pageNo: 1, pages: pdf.numPages, sig };
+  // PDF 沒有 DXF 那一路的計算式表；不重設的話上一張 DXF 的晶片會留在工具列上
+  state.calc = null; state.encoding = null; state.survey = null;
+  renderCalcChip();
   await state.viewer.loadPdf(pdf, 1);
+  switchMeasureContext(measureKeyOf(file.name, sig, 1));
   await readFramedScale(pdf, 1);
   $('#drawName').textContent = `${file.name} · ${pdf.numPages} 頁`
     + (state.pdfScale && state.pdfScale.paper ? ` · ${state.pdfScale.paper.name}` : '');
@@ -769,6 +786,7 @@ async function loadPdfFile(file) {
     if (!n || n < 1 || n > pdf.numPages) return;
     state.drawing.pageNo = n;
     await state.viewer.loadPdf(pdf, n);
+    switchMeasureContext(measureKeyOf(file.name, sig, n));
     await readFramedScale(pdf, n);
     chip.innerHTML = `第 <b>${n}</b>/${pdf.numPages} 頁`;
     updateScaleChip(); renderMeasureList();
@@ -784,8 +802,7 @@ async function loadPdfFile(file) {
  *   2) 使用者自行啟用的 GPL WASM 解析器（不隨本專案散布，由操作者自負授權責任）
  *   3) 人工轉出 DXF/PDF
  */
-async function loadDwgFile(file) {
-  const buf = await file.arrayBuffer();
+async function loadDwgFile(file, buf, sig) {
   const ver = DXF.dwgVersion(buf);
   const endpoint = window.TAKEOFF_DWG_ENDPOINT || '/api/convert-dwg';
   $('#drawName').textContent = `DWG (${ver.name || ver.sig}) 轉檔中…`;
@@ -801,8 +818,9 @@ async function loadDwgFile(file) {
       const text = await r.text();
       const doc = DXF.parseDxf(text);
       if (doc.entities.length) {
-        state.drawing = { name: file.name, kind: 'dwg', doc, via: 'server' };
+        state.drawing = { name: file.name, kind: 'dwg', doc, via: 'server', sig };
         state.viewer.loadDxf(doc);
+        switchMeasureContext(measureKeyOf(file.name, sig, 1));
         $('#drawName').textContent = `${file.name} · 經轉檔服務 · ${doc.entities.length} 實體`;
         updateScaleChip(); renderMeasureList(); openLayers();
         return;
@@ -811,7 +829,7 @@ async function loadDwgFile(file) {
     const detail = await r.text().catch(() => '');
     throw new Error(`轉檔服務回應 ${r.status}${detail ? '：' + detail.slice(0, 200) : ''}`);
   } catch (err) {
-    if (window.TAKEOFF_LIBREDWG_BASE) { await loadDwgViaWasm(buf, file.name); return; }
+    if (window.TAKEOFF_LIBREDWG_BASE) { await loadDwgViaWasm(buf, file.name, sig); return; }
     $('#drawName').textContent = '未載入圖面';
     dialog('DWG 需要轉檔', `
       <p>偵測到 <b>${esc(file.name)}</b>（${esc(ver.name || ver.sig || '未知版本')}）。DWG 是 Autodesk 的封閉二進位格式，
@@ -829,7 +847,7 @@ async function loadDwgFile(file) {
   }
 }
 
-async function loadDwgViaWasm(buf, name) {
+async function loadDwgViaWasm(buf, name, sig) {
   const base = window.TAKEOFF_LIBREDWG_BASE.replace(/\/?$/, '/');
   const mod = await import(/* @vite-ignore */ base + 'libredwg-web.js');
   const lib = await mod.LibreDwg.create(base);
@@ -837,10 +855,189 @@ async function loadDwgViaWasm(buf, name) {
   const db = lib.convert(dwg);
   const doc = DXF.fromDwgDatabase(db);
   try { lib.dwg_free(dwg); } catch { /* 記憶體釋放失敗不影響解析結果 */ }
-  state.drawing = { name, kind: 'dwg', doc, via: 'wasm' };
+  state.drawing = { name, kind: 'dwg', doc, via: 'wasm', sig };
   state.viewer.loadDxf(doc);
+  switchMeasureContext(measureKeyOf(name, sig, 1));
   $('#drawName').textContent = `${name} · WASM 解析 · ${doc.entities.length} 實體`;
   updateScaleChip(); renderMeasureList(); openLayers();
+}
+
+/* ══════════ 圖面版本與量測歸屬 ══════════ */
+
+/**
+ * 檔案內容簽章 —— 用來回答一個問題：「這張圖跟上次載的那張，是不是同一版？」
+ *
+ * 不是為了防竄改，所以不需要密碼學雜湊。取頭尾各 64KB 加檔案大小做 FNV-1a，
+ * 對「同一個檔名的新舊版」這件事已經足夠，而且再大的 DWG 也只花幾毫秒。
+ * 全檔雜湊對 50MB 的圖檔會卡住畫面，那個代價換不到對應的準確度。
+ */
+function fileSig(buf) {
+  const all = new Uint8Array(buf);
+  const n = all.length;
+  const head = all.subarray(0, Math.min(65536, n));
+  const tail = all.subarray(Math.max(0, n - 65536));
+  let h = 0x811c9dc5;
+  const mix = (arr) => {
+    for (let i = 0; i < arr.length; i++) { h ^= arr[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+  };
+  mix(head); mix(tail);
+  h ^= n; h = Math.imul(h, 0x01000193) >>> 0;
+  return `${n.toString(36)}-${h.toString(36)}`;
+}
+
+/** 量測歸屬的鍵：同一張圖的同一頁、同一版，才是同一組量測。 */
+function measureKeyOf(name, sig, page) { return `${name}@${sig}#${page || 1}`; }
+
+/**
+ * 切換量測情境。
+ *
+ * 量測的座標只在「畫它的那張圖」上有意義 —— 換了圖還留著，畫面上會出現一條
+ * 位置完全不對的線，而且會用新圖的比例去換算舊圖的長度，算出一個看起來正常的假數字。
+ * 所以不是共用一份清單，而是依圖分開存：換圖時把現有的收起來、把該圖的拿出來。
+ * 收起來而不是刪掉 —— 切回同一張圖時量測要還在，不然這個保護就變成懲罰。
+ */
+function switchMeasureContext(key) {
+  const v = state.viewer;
+  if (state.measureKey === key) return;
+  if (state.measureKey) state.measureStore[state.measureKey] = v.measurements;
+  v.measurements = state.measureStore[key] || [];
+  state.measureKey = key;
+  v.render();
+  renderMeasureList();
+}
+
+/**
+ * 登記這次載入的圖，並回報它是不是同一張圖的新版本。
+ *
+ * 同名不同內容 = 圖改版了。這是判斷「清單裡那些圖面量是不是過期」的唯一可靠訊號 ——
+ * 用「目前載的圖 ≠ 數量的出處圖」去判斷是錯的：一個案子本來就有電氣圖、給排水圖、
+ * 空調圖好幾張，載了給排水圖不代表電氣的量過期。那樣判會整片誤報，
+ * 而誤報的警告比沒有警告更糟：人會學會忽略它。
+ */
+function registerDrawing(name, sig) {
+  const prev = state.drawingSigs[name];
+  state.drawingSigs[name] = sig;
+  if (!prev || prev === sig) return { revised: false, affected: [] };
+  const affected = state.items.filter((it) => it.provenance && it.provenance.drawing === name
+    && Q.isNum(it.qty.drawing));
+  affected.forEach((it) => { it.drawingStale = true; });
+  renderAll();
+  return { revised: true, affected };
+}
+
+/** 圖面量重新寫入時，過期標記就該消失 —— 這筆已經是新版圖來的了。 */
+function freshDrawingQty(it) { it.drawingStale = false; }
+
+/** 改版後跳一次，把受影響的工項攤開講清楚，並讓使用者決定清或留。 */
+function announceRevision(name, affected) {
+  const rows = affected.map((it) => `<tr><td>${esc(it.code)}</td><td>${esc(it.name)}</td>
+    <td class="n">${Q.fmt(it.qty.drawing, 2)} ${esc(it.unit)}</td>
+    <td class="hint">${esc(sourceNote(it, 'drawing'))}</td></tr>`).join('');
+  setTimeout(() => dialog('這張圖改版了', `
+    <p><b>${esc(name)}</b> 的內容與上次載入時不同 —— 同一個檔名，不同的圖。</p>
+    <p>下面 <b>${affected.length}</b> 筆工項的圖面量是<b>上一版</b>算出來的，現在已標成「舊版」：</p>
+    <table class="mkt"><thead><tr><th>代碼</th><th>名稱</th><th class="n">圖面量</th><th>出處</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="hint"><b>這些數字不會自動清掉。</b>它們可能已經進了基準版、已經發包，
+    自動刪除等於在你不知情的時候丟掉工作成果 —— 那比留著更危險。
+    這裡只負責讓它變得看得見，清或留由你決定。</p>`,
+    [{ label: '保留，我自己核對' },
+      { label: `清除這 ${affected.length} 筆圖面量`, primary: true, fn: () => clearDrawingQty(affected, '圖面改版') }]), 120);
+}
+
+/** 清掉一批工項的圖面量與其出處。只動圖面量，不碰 BOQ 量與人工確認量。 */
+function clearDrawingQty(items, why) {
+  let n = 0;
+  for (const it of items) {
+    if (!Q.isNum(it.qty.drawing)) continue;
+    it.qty.drawing = null;
+    it.provenance = null;
+    it.drawingSource = null;
+    it.layerMapped = false;
+    it.calibration = null;
+    it.calibrationRms = null;
+    it.drawingStale = false;
+    n++;
+  }
+  renderAll(); persist();
+  setTimeout(() => dialog('已清除圖面量', `<p>已清除 <b>${n}</b> 筆工項的圖面量（原因：${esc(why)}）。</p>
+    <p class="hint">BOQ 量、人工確認量、計算式量都沒有動 —— 清除的只有從圖面算出來的那一條來源。
+    正式採購基準會自動退回下一個可用的來源，請回清單確認每一列的「正式採購基準」欄。</p>`), 80);
+}
+
+/** 目前這張圖有幾筆量測、有幾筆圖面量標成舊版 —— 任何清除動作都要先講清楚會清掉什麼。 */
+function drawingScopeCounts() {
+  const name = state.drawing ? state.drawing.name : '';
+  const fromThis = state.items.filter((it) => it.provenance && it.provenance.drawing === name
+    && Q.isNum(it.qty.drawing));
+  const stale = state.items.filter((it) => it.drawingStale && Q.isNum(it.qty.drawing));
+  const stored = Object.entries(state.measureStore)
+    .reduce((a, [k, v]) => a + (k === state.measureKey ? 0 : v.length), 0);
+  return { name, fromThis, stale, here: state.viewer.measurements.length, stored };
+}
+
+/**
+ * 清除／卸載。刻意分層，不做成一顆「全部清掉」——
+ * 使用者要的是「換一張圖繼續用」，不是「回到出廠設定」。
+ * 每一項都標出會影響幾筆，沒有一個動作是閉著眼睛按的。
+ */
+function openDrawingReset() {
+  const c = drawingScopeCounts();
+  const row = (id, label, note, n, danger) => `
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line2)">
+      <div style="flex:1;min-width:0"><b>${label}</b><div class="hint">${note}</div></div>
+      <button class="btn ${danger ? '' : 'sm'}" id="${id}" ${n === 0 ? 'disabled' : ''}
+        style="flex:none">${n === 0 ? '無可清除' : `清除 ${n} 筆`}</button>
+    </div>`;
+  dialog('清除 / 更新圖面', `
+    <p>目前載入：<b>${c.name ? esc(c.name) : '未載入圖面'}</b>${state.drawing && state.drawing.pageNo ? `　第 ${state.drawing.pageNo} 頁` : ''}</p>
+    <p class="hint">要換一張圖，直接按工具列的「載入圖面」即可 —— 量測會自動依圖分開，
+    不會把上一張的量測留在新圖上。下面這些是要「主動丟掉」東西時才用的。</p>
+    ${row('drClearMeas', '本圖量測', `這一張圖（這一頁）上畫的量測。其他圖的 ${c.stored} 筆不受影響。`, c.here)}
+    ${row('drClearStale', '標成「舊版」的圖面量', '圖改版後留下來的舊數字。清掉之後正式採購基準會退回下一個可用來源。', c.stale.length)}
+    ${row('drClearThis', '本圖產生的所有圖面量', `出處是《${esc(c.name || '—')}》的圖面量，不分新舊。`, c.fromThis.length)}
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line2)">
+      <div style="flex:1;min-width:0"><b>卸載圖面</b><div class="hint">把畫面清空回到未載入狀態。量測依圖保存著，重新載入同一張圖就會回來。</div></div>
+      <button class="btn sm" id="drUnload" ${state.drawing ? '' : 'disabled'} style="flex:none">卸載</button>
+    </div>
+    <p class="hint" style="margin-top:12px"><b>這裡不會動到</b> BOQ 量、人工確認量、計算式量、採購包、基準版與請購單。
+    要把整個專案清回範本狀態，在「參數」最下面有另一顆鍵 —— 那一顆會連已發出的請購單一起清掉。</p>`,
+    [{ label: '關閉' }], (body, gen) => {
+      const act = (id, fn) => { const b = body.querySelector(id); if (b && !b.disabled) b.onclick = () => { dlgClose(gen); setTimeout(fn, 60); }; };
+      act('#drClearMeas', () => {
+        const n = state.viewer.measurements.length;
+        state.viewer.clearMeasurements();
+        state.measureStore[state.measureKey] = [];
+        renderMeasureList(); persist();
+        dialog('已清除量測', `<p>已清除本圖的 <b>${n}</b> 筆量測。</p>
+          <p class="hint">已經寫進工項的圖面量<b>不會</b>跟著消失 —— 那是兩件事。
+          要一起清掉，回到這個視窗選「本圖產生的所有圖面量」。</p>`);
+      });
+      act('#drClearStale', () => clearDrawingQty(c.stale, '使用者清除舊版圖面量'));
+      act('#drClearThis', () => clearDrawingQty(c.fromThis, `清除《${c.name}》的圖面量`));
+      act('#drUnload', unloadDrawing);
+    });
+}
+
+/** 卸載圖面：畫面回到未載入狀態，但量測依圖收好，重新載入就回來。 */
+function unloadDrawing() {
+  const v = state.viewer;
+  if (state.measureKey) state.measureStore[state.measureKey] = v.measurements;
+  state.measureKey = '';
+  v.measurements = [];
+  v.mode = null; v.doc = null; v.flat = []; v.pdf = null; v.page = null; v.raster = null;
+  v.bounds = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  v.contentBounds = null;
+  v.metersPerUnit = null; v.scaleMethod = 'none';
+  v.calibrations = []; v.scaleZones = [];
+  v.notToScale = false; v.notToScaleWhy = '';
+  v.layerVisible = {};
+  v.render();
+  state.drawing = null;
+  state.calc = null; state.encoding = null; state.survey = null; state.pdfScale = null;
+  $('#drawName').textContent = '未載入圖面';
+  $('#pageChip').hidden = true;
+  renderCalcChip(); updateScaleChip(); renderMeasureList(); persist();
 }
 
 /* ══════════ 比例與量測 ══════════ */
@@ -1111,6 +1308,7 @@ function openAssign(mid) {
         const mode = $('#asMode').value;
         it.qty.drawing = mode === 'add' ? Q.roundTo((it.qty.drawing || 0) + val, 4) : Q.roundTo(val, 4);
         it.drawingSource = 'measure';
+        freshDrawingQty(it);
         it.closed = m.type === 'area' || m.type === 'rect' ? true : it.closed;
         const info = v.scaleInfo();
         it.calibration = info.method; it.calibrationRms = info.rms ?? 0;
@@ -1396,6 +1594,7 @@ function openLayers() {
           if (val == null) return;
           it.qty.drawing = Q.roundTo(val, 4);
           it.drawingSource = 'auto';
+          freshDrawingQty(it);
           it.layerMapped = true;
           it.calibration = 'native';
           it.calibrationRms = 0;
@@ -2369,7 +2568,9 @@ function sourceNote(it, k) {
   if (k === 'drawing') {
     const p = it.provenance;
     if (!p) return it.drawingSource === 'auto' ? '圖層自動彙總' : '未連結圖面';
-    return p.kind === 'dxf-layer' ? `圖層 ${p.layer}｜${p.drawing}` : `量測 ${(p.measurements || []).length} 筆｜${p.drawing}${p.page ? ' p.' + p.page : ''}`;
+    const base = p.kind === 'dxf-layer' ? `圖層 ${p.layer}｜${p.drawing}`
+      : `量測 ${(p.measurements || []).length} 筆｜${p.drawing}${p.page ? ' p.' + p.page : ''}`;
+    return it.drawingStale ? `${base}（此圖已改版，本數量為舊版）` : base;
   }
   if (k === 'manual') return it.manualNote || '（未填理由）';
   if (k === 'boq') return '契約／標單數量';
@@ -2443,7 +2644,10 @@ function openSettings() {
       <button class="btn" id="sExportProj">匯出專案 JSON</button>
       <button class="btn" id="sImportProj">匯入專案 JSON</button>
       <button class="btn" id="sReset">重置為範本</button>
-    </div>`,
+    </div>
+    <p class="hint" style="margin-top:6px"><b>重置為範本會清掉全部</b> —— 圖面量、BOQ 量、人工確認、採購包、
+    基準版與已產生的請購單，全部回到剛開啟的狀態，且無法復原。
+    只是要換一張圖或清掉某一張圖的量，用圖面量測工具列的「清除／更新」，那一顆不會動到其他來源。</p>`,
     [{ label: '取消' }, {
       label: '套用', primary: true, fn: () => {
         s.varianceWarn = parseFloat($('#sWarn').value) || 0;
@@ -2469,7 +2673,7 @@ function openSettings() {
       body.querySelector('#sExportProj').onclick = () => { exportProject(); dlgClose(gen); };
       body.querySelector('#sImportProj').onclick = () => { $('#fileProject').click(); dlgClose(gen); };
       body.querySelector('#sReset').onclick = () => {
-        if (!confirm('清除所有本機修改，回到範本狀態？')) return;
+        if (!confirm('清除所有本機修改，回到範本狀態？\n\n包含：圖面量、BOQ 量、人工確認、採購包、基準版、請購單。\n此動作無法復原。')) return;
         try { localStorage.removeItem(LS_KEY); } catch { /* 無 localStorage 時直接重載 */ }
         location.reload();
       };

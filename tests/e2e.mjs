@@ -1063,6 +1063,109 @@ ok('多張工作表時不提供 TSV（貼上只會貼到一張）',
   await page.locator('#xTsv').count() === 0);
 await closeDialog(page);
 
+console.log('\n【7之五】換圖與清除');
+// 起因：使用者問「這畫面好像沒有清除鍵，若我要更新圖面，無法更新」。
+// 實測下來問題比「不能更新」更糟 —— 能更新，但更新得不乾淨，而且不乾淨的地方都不講：
+// 舊圖的量測還掛在新圖上（座標是舊圖的，會用新圖的比例換算出一個看起來正常的假數字），
+// 舊圖寫進清單的圖面量也還在，出處欄還寫著舊檔名。
+await page.locator('#tabView').click();
+await page.waitForTimeout(200);
+await closeDialog(page);
+
+// 第一張圖 + 一筆量測 + 兩筆圖面量
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-calcsheet.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+await page.evaluate(() => {
+  const { state } = window.__takeoff;
+  state.viewer.measurements.push({ id: 'M-A', type: 'length', pts: [{ x: 0, y: 0 }, { x: 100, y: 0 }], itemCode: null });
+  for (const c of ['321.02', '323.01']) {
+    const it = state.itemByCode.get(c);
+    it.qty.drawing = 946;
+    it.provenance = { kind: 'dxf-layer', drawing: state.drawing.name, layer: 'L1', at: '' };
+  }
+});
+const key1 = await page.evaluate(() => window.__takeoff.state.measureKey);
+ok('量測依「哪張圖的哪一頁」歸屬', /fixture-calcsheet\.dxf@.+#1$/.test(key1), key1);
+
+// 換成別張圖
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-tm2-ok.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+const sw = await page.evaluate(() => {
+  const { state } = window.__takeoff;
+  return { meas: state.viewer.measurements.length, nts: state.viewer.notToScale,
+    calcChip: !document.querySelector('#calcChip').hidden,
+    stale: !!state.itemByCode.get('321.02').drawingStale };
+});
+ok('換圖後舊圖的量測不會留在新圖上', sw.meas === 0, `還有 ${sw.meas} 筆`);
+ok('換到別張圖不會誤判既有圖面量過期', sw.stale === false,
+  '一個案子本來就有電氣圖／給排水圖好幾張，誤報會讓人學會忽略警告');
+
+// 切回第一張 —— 量測是收起來，不是刪掉
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-calcsheet.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+const back = await page.evaluate(() => window.__takeoff.state.viewer.measurements.map((m) => m.id));
+ok('切回同一張圖，量測會回來（收起來，不是刪掉）', back.join() === 'M-A', back.join() || '(空)');
+
+// 同名不同內容 = 圖改版
+const revised = Buffer.concat([await readFile(join(FIX, 'fixture-calcsheet.dxf')), Buffer.from('\n999\nREV-B\n')]);
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles({ name: 'fixture-calcsheet.dxf', mimeType: 'image/vnd.dxf', buffer: revised });
+await page.waitForTimeout(1800);
+let revTitle = '';
+for (let i = 0; i < 6; i++) {
+  if (!(await page.locator('#dlg[open]').count())) break;
+  revTitle = await page.locator('#dlgTitle').innerText();
+  if (revTitle.includes('改版')) break;
+  await page.locator('#dlgFoot button').first().click();
+  await page.waitForTimeout(200);
+}
+ok('同名不同內容會判定為圖改版並主動說明', revTitle.includes('改版'), revTitle);
+ok('改版對話框列出受影響的工項', (await page.locator('#dlgBody').innerText()).includes('321.02'));
+await closeDialog(page, 6);
+const rev = await page.evaluate(() => {
+  const { state } = window.__takeoff;
+  const it = state.itemByCode.get('321.02');
+  return { stale: !!it.drawingStale, qty: it.qty.drawing, note: state.itemByCode.get('321.02').provenance?.drawing };
+});
+ok('舊版圖算出來的圖面量被標成「舊版」', rev.stale === true);
+ok('標成舊版不等於自動刪除（可能已進基準版、已發包）', rev.qty === 946, String(rev.qty));
+await page.locator('#tabList').click();
+await page.waitForTimeout(250);
+ok('清單上看得到「舊版」標記', (await page.locator('tr[data-code="321.02"]').innerText()).includes('舊版'));
+
+// 清除是分層的，不是一顆核彈
+await page.locator('#tabView').click();
+await page.waitForTimeout(200);
+await page.locator('#btnDrawReset').click();
+await page.waitForSelector('#dlg[open]');
+const resetTxt = await page.locator('#dlgBody').innerText();
+ok('清除對話框標明每一項會影響幾筆', /清除 \d+ 筆/.test(resetTxt), resetTxt.slice(0, 90));
+ok('清除對話框明說不會動到其他來源', resetTxt.includes('BOQ 量') && resetTxt.includes('基準版'));
+await page.locator('#drClearStale').click();
+await page.waitForTimeout(500);
+const cleared = await page.evaluate(() => {
+  const it = window.__takeoff.state.itemByCode.get('321.02');
+  return { draw: it.qty.drawing, boq: it.qty.boq, prov: it.provenance, stale: !!it.drawingStale };
+});
+ok('清除舊版圖面量只清圖面量', cleared.draw == null && cleared.prov == null);
+ok('BOQ 量不受清除影響', cleared.boq != null, String(cleared.boq));
+await closeDialog(page, 6);
+
+// 卸載
+await page.locator('#btnDrawReset').click();
+await page.waitForTimeout(250);
+await page.locator('#drUnload').click();
+await page.waitForTimeout(400);
+ok('卸載後回到未載入狀態', (await page.locator('#drawName').innerText()).includes('未載入'));
+ok('卸載後計算式晶片一起收掉', await page.locator('#calcChip').isHidden());
+await closeDialog(page, 6);
+
 console.log('\n【8】重整後狀態保留');
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);

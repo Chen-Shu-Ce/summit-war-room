@@ -35,6 +35,10 @@
     --paper:#f8fafc;
 }
 *{box-sizing:border-box}
+/* .chip 這類有 display 的 class 會蓋掉瀏覽器預設的 [hidden]{display:none}，
+   結果是 hidden 設了卻還看得見 —— 工具列上會一直掛著兩個空的小膠囊。
+   放在這裡用 !important 一次講死，之後任何 class 都不會再蓋掉它。 */
+[hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);-webkit-text-size-adjust:100%}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -274,6 +278,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
     <div class="brand">WBS 階層式工程量清單選擇器<small>Summit War Room · Quantity Takeoff → Procurement Package</small></div>
     <div class="spacer"></div>
     <button class="btn" id="btnImportDrawing">載入圖面 (DWG/DXF/PDF)</button>
+    <button class="btn" id="btnDrawReset">清除／更新圖面</button>
     <button class="btn" id="btnImportBoq">匯入 BOQ CSV</button>
     <button class="btn" id="btnSettings">參數</button>
     <button class="btn" id="btnExport">匯出</button>
