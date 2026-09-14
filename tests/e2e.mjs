@@ -164,8 +164,28 @@ const mapped = await page.evaluate(() => {
   const sels = [...document.querySelectorAll('#dlgBody [data-map]')];
   return sels.map((s) => [s.parentElement.querySelector('.lname').textContent, s.value]);
 });
-ok('E-CABLE-PWR 自動猜到電纜工項', mapped.some(([l, v]) => l === 'E-CABLE-PWR' && v.startsWith('321.')), JSON.stringify(mapped));
+// E-CABLE-PWR 刻意「不」自動對應：範本裡 321.01（38mm²）與 321.02（22mm²）
+// 的 layerHints 都是 E-CABLE-PWR，而一條線在幾何上看不出是哪一種。
+// 舊版會安靜地挑先出現的那個，把整層長度算到它頭上 —— 那是靜默的錯帳。
+ok('共用關鍵字的圖層不自動對應，留白待人工指定',
+  mapped.some(([l, v]) => l === 'E-CABLE-PWR' && v === ''), JSON.stringify(mapped));
+const tie = await page.evaluate(() => {
+  const m = window.__takeoff.LM.match('E-CABLE-PWR', window.__takeoff.state.items, null);
+  return { best: m.best, amb: m.ambiguous };
+});
+ok('並且明確指出是哪兩個工項分不開', tie.best === null
+  && tie.amb.includes('321.01') && tie.amb.includes('321.02'), JSON.stringify(tie));
+ok('對話框說明無法分辨的原因', (await page.locator('#dlgBody').innerText()).includes('無法分辨'));
 ok('E-LITE 自動猜到照明工項', mapped.some(([l, v]) => l === 'E-LITE' && v.startsWith('331.')), JSON.stringify(mapped));
+ok('每一列都寫出判定依據，不是黑箱',
+  (await page.locator('#dlgBody').innerText()).includes('圖層關鍵字'));
+// 人工指定 321.01，再套用 —— 驗證寫入路徑本身沒壞
+await page.evaluate(() => {
+  const sel = [...document.querySelectorAll('#dlgBody [data-map]')]
+    .find((s) => s.parentElement.querySelector('.lname').textContent === 'E-CABLE-PWR');
+  sel.value = '321.01';
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+});
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForTimeout(200);
 const drawQty = await page.evaluate(() => {
@@ -1165,6 +1185,106 @@ await page.waitForTimeout(400);
 ok('卸載後回到未載入狀態', (await page.locator('#drawName').innerText()).includes('未載入'));
 ok('卸載後計算式晶片一起收掉', await page.locator('#calcChip').isHidden());
 await closeDialog(page, 6);
+
+console.log('\n【7之六】換圖時自動清除圖面量');
+// 使用者要的：「BOM清單可以在下個圖面時自動清除嗎？」
+// 可以，但要有護欄：已經凍結進基準版或已開請購單的工項不能被自動清掉，
+// 否則已經發出去的文件會在沒人知道的情況下跟清單對不起來。
+await page.locator('#tabView').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+// 這一段會動到工項數量、採購包與基準版，結束前要原樣還回去，
+// 否則後面的「重整後狀態保留」會拿被污染的狀態去比對。
+const snapBefore = await page.evaluate(() => {
+  const { state } = window.__takeoff;
+  return {
+    qty: Object.fromEntries(['321.01', '321.02', '323.01']
+      .map((c) => [c, JSON.parse(JSON.stringify({ q: state.itemByCode.get(c).qty,
+        p: state.itemByCode.get(c).provenance || null }))])),
+    pkgs: state.packages.length, bls: state.baselines.length,
+  };
+});
+await page.evaluate(() => { window.__takeoff.state.settings.clearOnDrawingChange = 'prev'; });
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-calcsheet.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+const lockRes = await page.evaluate(() => {
+  const { state, B } = window.__takeoff;
+  for (const c of ['321.01', '321.02', '323.01']) {
+    const it = state.itemByCode.get(c);
+    it.qty.drawing = 500;
+    it.provenance = { kind: 'dxf-layer', drawing: state.drawing.name, layer: 'L', at: '' };
+  }
+  // 用真的凍結流程把 321.01 鎖進基準版
+  const pkg = { code: 'PKG-LOCK', name: '鎖定測試包', itemCodes: ['321.01'], vendor: '', needDate: '' };
+  state.packages.push(pkg);
+  const r = B.freezeBaseline(pkg, [state.itemByCode.get('321.01')], state.settings,
+    { confirmedBy: '測試工程師', by: '測試工程師', note: 'e2e' });
+  if (r.error) return { error: r.error };
+  state.baselines.push(r.baseline);
+  window.__takeoff.renderAll();
+  return { locked: r.baseline.items.map((x) => x.code) };
+});
+ok('已把 321.01 凍結進基準版', !lockRes.error && lockRes.locked.includes('321.01'), JSON.stringify(lockRes));
+
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-tm2-ok.dxf'));
+await page.waitForTimeout(1500);
+let clearTitle = '';
+for (let i = 0; i < 6; i++) {
+  if (!(await page.locator('#dlg[open]').count())) break;
+  clearTitle = await page.locator('#dlgTitle').innerText();
+  if (clearTitle.includes('自動清除')) break;
+  await page.locator('#dlgFoot button').first().click();
+  await page.waitForTimeout(200);
+}
+ok('換圖時自動清除，而且會講一聲（自動歸自動，不可無聲無息）', clearTitle.includes('自動清除'), clearTitle);
+const clearBody = await page.locator('#dlgBody').innerText();
+ok('說明保留了幾筆與為什麼', clearBody.includes('基準版') && clearBody.includes('請購單'), clearBody.slice(0, 120));
+await closeDialog(page, 6);
+const afterClear = await page.evaluate(() => {
+  const g = (c) => window.__takeoff.state.itemByCode.get(c);
+  return { locked: g('321.01').qty.drawing, a: g('321.02').qty.drawing, b: g('323.01').qty.drawing,
+    boq: g('321.02').qty.boq, prov: g('321.02').provenance };
+});
+ok('未承諾的圖面量被清掉', afterClear.a == null && afterClear.b == null, JSON.stringify(afterClear));
+ok('已凍結進基準版的不會被自動清掉', afterClear.locked === 500, String(afterClear.locked));
+ok('BOQ 量不受影響', afterClear.boq != null, String(afterClear.boq));
+ok('出處一併清除，不留孤兒', afterClear.prov == null);
+
+// 關掉之後不該再清
+await page.evaluate(() => { window.__takeoff.state.settings.clearOnDrawingChange = 'keep'; });
+await page.evaluate(() => {
+  const it = window.__takeoff.state.itemByCode.get('323.01');
+  it.qty.drawing = 777;
+  it.provenance = { kind: 'dxf-layer', drawing: window.__takeoff.state.drawing.name, layer: 'L', at: '' };
+});
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-calcsheet.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+ok('設為「保留」時換圖不會清（預設就是這個）',
+  await page.evaluate(() => window.__takeoff.state.itemByCode.get('323.01').qty.drawing) === 777);
+
+// 還原這一段動過的東西
+await page.evaluate((b) => {
+  const { state } = window.__takeoff;
+  for (const [code, v] of Object.entries(b.qty)) {
+    const it = state.itemByCode.get(code);
+    it.qty = v.q;
+    it.provenance = v.p;
+    it.drawingStale = false;
+  }
+  state.packages.length = b.pkgs;
+  state.baselines.length = b.bls;
+  window.__takeoff.renderAll();
+}, snapBefore);
+ok('測試自己造的採購包與基準版已還原', await page.evaluate((b) => {
+  const { state } = window.__takeoff;
+  return state.packages.length === b.pkgs && state.baselines.length === b.bls
+    && state.itemByCode.get('321.01').qty.drawing === b.qty['321.01'].q.drawing;
+}, snapBefore));
 
 console.log('\n【8】重整後狀態保留');
 await page.reload();

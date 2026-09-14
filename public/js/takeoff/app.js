@@ -18,6 +18,7 @@ import * as ENC from './encoding.js';
 import * as U from './units.js';
 import * as SV from './survey.js';
 import * as PS from './pdfscale.js';
+import * as LM from './layermatch.js';
 import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
@@ -706,6 +707,7 @@ async function loadDrawing(file) {
   $('#drawName').textContent = `載入中… ${name}`;
   try {
     // 檔案只讀一次。簽章在這裡算好往下傳，三條載入路徑共用同一個版本判斷。
+    const prev = state.drawing ? { name: state.drawing.name, sig: state.drawing.sig } : null;
     const buf = await file.arrayBuffer();
     const sig = fileSig(buf);
     const rev = registerDrawing(name, sig);
@@ -713,8 +715,14 @@ async function loadDrawing(file) {
     else if (ext === 'dxf') await loadDxfFile(file, buf, sig);
     else if (ext === 'dwg') await loadDwgFile(file, buf, sig);
     else throw new Error('僅支援 DWG / DXF / PDF');
+    // 真的換了圖才清（同一個檔重新載入不算）
+    const changed = !prev || prev.name !== name || prev.sig !== sig;
+    const auto = changed ? autoClearOnDrawingChange(prev && prev.name) : null;
     persist();
-    if (rev.revised && rev.affected.length) announceRevision(name, rev.affected);
+    if (auto) announceAutoClear(auto, prev && prev.name);
+    // 自動清除之後還留著的才需要提醒改版 —— 已經清掉的不必再講一次
+    const leftover = rev.revised ? rev.affected.filter((it) => Q.isNum(it.qty.drawing)) : [];
+    if (leftover.length) announceRevision(name, leftover);
   } catch (e) {
     console.error(e);
     $('#drawName').textContent = '載入失敗';
@@ -923,6 +931,65 @@ function registerDrawing(name, sig) {
   affected.forEach((it) => { it.drawingStale = true; });
   renderAll();
   return { revised: true, affected };
+}
+
+/**
+ * 已經被「承諾出去」的工項代碼 —— 進過基準版、或已經開了請購單的。
+ *
+ * 這些數字不是草稿了：基準版是凍結過的版本，請購單可能已經寄給廠商。
+ * 自動清除可以清工作中的數字，但不能清這些 —— 那等於在使用者不知情時
+ * 讓已發出的文件與清單對不起來。所以自動清除一律跳過它們，並且明講跳過了幾筆。
+ */
+function committedCodes() {
+  const set = new Set();
+  for (const bl of state.baselines) for (const it of bl.items || []) if (it.code) set.add(it.code);
+  for (const pr of state.prs) for (const ln of pr.lines || []) if (ln.code) set.add(ln.code);
+  return set;
+}
+
+/**
+ * 換圖時自動清除圖面量。預設關閉。
+ *
+ * 開這個功能的前提是「一張圖量完就走，下一張重來」的作業方式。
+ * 若一個案子是多張圖各自貢獻不同工項的量（電氣圖、給排水圖、空調圖），
+ * 開「全部」會把上一張圖辛苦量的結果一起清掉 —— 所以預設是不清，
+ * 而且「只清上一張圖產生的」永遠比「全部」安全。
+ */
+function autoClearOnDrawingChange(prevName) {
+  const mode = state.settings.clearOnDrawingChange || 'keep';
+  if (mode === 'keep') return null;
+  const all = state.items.filter((it) => Q.isNum(it.qty.drawing));
+  const targets = mode === 'all' ? all
+    : all.filter((it) => it.provenance && it.provenance.drawing === prevName);
+  if (!targets.length) return null;
+  const locked = committedCodes();
+  const clear = targets.filter((it) => !locked.has(it.code));
+  const kept = targets.filter((it) => locked.has(it.code));
+  for (const it of clear) {
+    it.qty.drawing = null;
+    it.provenance = null;
+    it.drawingSource = null;
+    it.layerMapped = false;
+    it.calibration = null;
+    it.calibrationRms = null;
+    it.drawingStale = false;
+  }
+  renderAll();
+  return { mode, cleared: clear.length, kept };
+}
+
+/** 自動清除跑完之後講一次 —— 自動歸自動，但不可以無聲無息。 */
+function announceAutoClear(r, prevName) {
+  const modeLabel = r.mode === 'all' ? '全部圖面量' : `上一張圖（${prevName || '—'}）產生的圖面量`;
+  setTimeout(() => dialog('已自動清除圖面量', `
+    <p>依「參數 → 換圖時的圖面量」設定（<b>${esc(modeLabel)}</b>），
+    已清除 <b>${r.cleared}</b> 筆工項的圖面量。</p>
+    ${r.kept.length ? `<p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+      另有 <b>${r.kept.length}</b> 筆<b>沒有</b>清除，因為它們已經凍結進基準版或已開立請購單：
+      ${esc(r.kept.slice(0, 8).map((it) => it.code).join('、'))}${r.kept.length > 8 ? ' …' : ''}。
+      已經發出去的文件不可以在你不知情的時候跟清單對不起來 —— 要改請走基準版的修訂流程。</p>` : ''}
+    <p class="hint">BOQ 量、人工確認量、計算式量都沒有動，清掉的只有從圖面算出來的那一條來源。
+    不想每次都清，到「參數 → 換圖時的圖面量」改回「保留」。</p>`), 140);
 }
 
 /** 圖面量重新寫入時，過期標記就該消失 —— 這筆已經是新版圖來的了。 */
@@ -1558,31 +1625,48 @@ function openLayers() {
   if (v.mode !== 'dxf' || !v.doc) return dialog('僅適用向量圖檔', '<p>圖層自動抓量需要 DXF／DWG 幾何。PDF 請用量測工具逐段量。</p>');
   const agg = DXF.aggregateByLayer(v.doc);
   const toM = v.metersPerUnit;
+  const nameOf = (c) => { const it = state.itemByCode.get(c); return it ? `${it.code} ${it.name}` : c; };
+  const matches = agg.map((g) => matchLayer(g.layer, g));
+  const auto = matches.filter((m) => m.best).length;
+  const tied = matches.filter((m) => m.ambiguous.length).length;
   const rows = agg.map((g, i) => {
-    const guess = guessItem(g.layer);
+    const m = matches[i];
     const blocks = Object.entries(g.blocks).map(([n, c]) => `${n}×${c}`).join('、');
+    const chip = m.best ? `<span class="chip ${m.band === 'high' ? 'ok' : 'acc'}">自動 ${m.score}</span>`
+      : m.ambiguous.length ? '<span class="chip bad">無法分辨</span>'
+        : m.band === 'blocked' ? '<span class="chip warn">型態不符</span>'
+          : '<span class="chip">需人工</span>';
     return `<div class="layerrow">
       <input type="checkbox" data-lv="${esc(g.layer)}" ${v.layerVisible[g.layer] === false ? '' : 'checked'} style="width:auto" title="顯示／隱藏">
       <span class="lname" title="${esc(g.layer)}">${esc(g.layer)}</span>
       <span class="num" style="width:96px">${toM ? Q.fmt(g.length * toM, 1) + ' M' : Q.fmt(g.length, 1)}</span>
       <span class="num" style="width:96px">${toM ? Q.fmt(g.area * toM * toM, 1) + ' M²' : Q.fmt(g.area, 1)}</span>
       <span class="num" style="width:54px">${g.count}</span>
-      <select data-map="${i}" style="width:250px">
+      <select data-map="${i}" style="width:230px">
         <option value="">— 不對映 —</option>
-        ${state.items.map((it) => `<option value="${esc(it.code)}" ${guess === it.code ? 'selected' : ''}>${esc(it.code)} · ${esc(it.name)}（${esc(it.unit)}）</option>`).join('')}
+        ${state.items.map((it) => `<option value="${esc(it.code)}" ${m.best === it.code ? 'selected' : ''}>${esc(it.code)} · ${esc(it.name)}（${esc(it.unit)}）</option>`).join('')}
       </select>
-      <span class="hint" style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(blocks)}</span>
+      ${chip}
+      <span class="hint" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+        title="${esc(LM.explain(m, nameOf))}${blocks ? ' ｜圖塊 ' + esc(blocks) : ''}">${esc(LM.explain(m, nameOf))}</span>
     </div>`;
   }).join('');
   dialog('圖層彙總 → 工項自動抓量', `
     <div class="hint" style="display:flex;gap:8px;padding:0 10px 6px">
       <span style="flex:1">圖層（${agg.length}）</span><span style="width:96px;text-align:right">長度</span>
       <span style="width:96px;text-align:right">面積</span><span style="width:54px;text-align:right">數量</span>
-      <span style="width:250px">對映工項</span><span style="width:120px">圖塊</span></div>
-    <div style="max-height:46vh;overflow:auto">${rows}</div>
+      <span style="width:230px">對映工項</span><span style="flex:1">判定依據</span></div>
+    <div style="max-height:44vh;overflow:auto">${rows}</div>
+    <p class="hint"><b>${agg.length}</b> 個圖層：自動對應 <b>${auto}</b> 個${tied ? `、<b class="bad">${tied} 個無法分辨</b>` : ''}，其餘留白待人工指定。</p>
+    ${tied ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
+      「無法分辨」是指有兩個以上的工項對到同一個圖層，而<b>幾何上看不出差別</b> ——
+      例如 38mm² 與 22mm² 的電纜畫在同一層，線就是線，圖面本身沒有這個資訊。
+      這不是演算法不夠聰明，硬選一個只會把整層的長度算到其中一個工項頭上。請人工指定。</p>` : ''}
     <p class="hint">自動抓量取的是「該圖層所有實體的總長／總面積／實體數」。它的前提是<b>圖層紀律</b>：
     同一圖層只放同一種構件、不重複描繪、不用圖層當註記。這個前提在多數實際專案不成立，
-    所以自動抓量的結果會標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。</p>`,
+    所以自動抓量的結果會標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。
+    <b>數量本身完全來自幾何，對應只決定「算到哪個工項」</b> —— 對應錯了數字會不合理而被發現，
+    這是它可以自動、而「看圖估數量」不可以自動的差別。</p>`,
     [{ label: '關閉' }, {
       label: '套用對映', primary: true, fn: () => {
         let n = 0;
@@ -1613,17 +1697,15 @@ function openLayers() {
     });
 }
 
-function guessItem(layer) {
-  const l = layer.toLowerCase();
-  let best = null, bestLen = 0;
-  for (const it of state.items) {
-    for (const h of (it.layerHints || [])) {
-      const hh = String(h).toLowerCase();
-      if (hh && l.includes(hh) && hh.length > bestLen) { best = it.code; bestLen = hh.length; }
-    }
-  }
-  return best;
-}
+/**
+ * 圖層對哪個工項。細節在 layermatch.js，這裡只是把 state.items 餵進去。
+ *
+ * 原本的作法是「圖層名稱含有 layerHints 的子字串就選它」，有一個安靜的錯：
+ * 範本裡 321.01（38mm² 電纜）與 321.02（22mm² 電纜）的 layerHints 都是 E-CABLE-PWR，
+ * 它會挑先出現的那一個，把整個圖層的長度算到它頭上，另一個變成 0 ——
+ * 而畫面上不會有任何異狀。現在同分會標成「無法分辨」，不自動選。
+ */
+function matchLayer(layer, g) { return LM.match(layer, state.items, g); }
 
 function layerValueFor(item, g, toM) {
   switch (item.measureType) {
@@ -2601,6 +2683,11 @@ function openSettings() {
       <div><label class="f">預設損耗率</label><input type="number" id="sWaste" step="0.005" min="0" value="${s.defaultWasteRate}"></div>
       <div><label class="f">轉採購最低可信度</label><select id="sGate">${['A', 'B', 'C', 'D'].map((b) => `<option ${s.gateBand === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
       <div><label class="f">合約型態</label><select id="sContract">${Object.values(Q.CONTRACT_TYPES).map((c) => `<option value="${c.key}" ${s.contractType === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
+      <div><label class="f">換圖時的圖面量</label><select id="sClearDraw">
+        <option value="keep" ${(s.clearOnDrawingChange || 'keep') === 'keep' ? 'selected' : ''}>保留（預設）</option>
+        <option value="prev" ${s.clearOnDrawingChange === 'prev' ? 'selected' : ''}>清除上一張圖產生的</option>
+        <option value="all" ${s.clearOnDrawingChange === 'all' ? 'selected' : ''}>清除全部圖面量</option>
+      </select></div>
       <div><label class="f">RFI 擋採購的嚴重度</label><select id="sRfiGate">
         <option value="high" ${(s.rfiBlockSeverity || 'high') === 'high' ? 'selected' : ''}>高（預設）</option>
         <option value="med" ${s.rfiBlockSeverity === 'med' ? 'selected' : ''}>中以上</option>
@@ -2656,6 +2743,7 @@ function openSettings() {
         s.gateBand = $('#sGate').value;
         s.contractType = $('#sContract').value;
         s.rfiBlockSeverity = $('#sRfiGate').value;
+        s.clearOnDrawingChange = $('#sClearDraw').value;
         s.prTemplate = $('#sPrTpl').value.trim() || B.DEFAULT_PR_TEMPLATE;
         const tx = parseFloat($('#sTax').value); s.taxRate = Number.isFinite(tx) ? tx : 0.05;
         s.dept = $('#sDept').value.trim();
@@ -3542,4 +3630,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
