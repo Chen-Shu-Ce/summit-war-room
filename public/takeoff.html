@@ -472,15 +472,18 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
         <button class="btn" id="btnSim">風險模擬</button>
         <button class="btn" id="btnMarket">行情連動</button>
         <button class="btn" id="btnAutoPkg">自動建議拆包</button>
+        <button class="btn" id="btnVendors">廠商主檔</button>
         <button class="btn" id="btnClearCart">清空</button>
       </div>
       <h2 style="border-top:1px solid var(--line)">採購包<span class="chip" id="pkgCount">0</span></h2>
       <div class="scroll" id="pkgs" style="max-height:26vh"></div>
-      <h2 style="border-top:1px solid var(--line)">基準版 / 請購單<span class="chip" id="blCount">0</span></h2>
-      <div class="scroll" id="baselines" style="max-height:26vh"></div>
-      <h2 style="border-top:1px solid var(--line)">發包單 (PO)<span class="chip" id="poCount">0</span>
-        <button class="btn sm" id="btnVendors" style="margin-left:auto">廠商主檔</button></h2>
-      <div class="scroll" id="pos" style="max-height:24vh"></div>
+      <!-- 這兩區沒有內容時整塊隱藏（含標題），不留空盒子佔畫面。
+           產生了 PR／PO 才會出現 —— 它同時是檢視、匯出、轉發包單、改狀態的唯一入口，
+           所以是「空的時候收起來」而不是拿掉。 -->
+      <h2 id="hdBl" style="border-top:1px solid var(--line)" hidden>基準版 / 請購單<span class="chip" id="blCount">0</span></h2>
+      <div class="scroll" id="baselines" style="max-height:26vh" hidden></div>
+      <h2 id="hdPo" style="border-top:1px solid var(--line)" hidden>發包單 (PO)<span class="chip" id="poCount">0</span></h2>
+      <div class="scroll" id="pos" style="max-height:24vh" hidden></div>
     </section>
   </div>
 </div>

@@ -1282,10 +1282,11 @@ function openVendors() {
 function renderPos() {
   const host = $('#pos');
   $('#poCount').textContent = state.pos.length;
-  if (!state.pos.length) {
-    host.innerHTML = '<div class="hint" style="padding:9px 11px">尚無發包單。請購單產生後，可在請購單視窗按「轉發包單」。</div>';
-    return;
-  }
+  // 同上：沒有發包單就整塊收起來。轉發包單的入口在請購單視窗裡，不在這。
+  const show = state.pos.length > 0;
+  $('#hdPo').hidden = !show;
+  host.hidden = !show;
+  if (!show) { host.innerHTML = ''; return; }
   host.innerHTML = state.pos.map((po) => {
     const st = PO.PO_STATUS[po.status] || PO.PO_STATUS.draft;
     const v = po.variance;
@@ -3286,10 +3287,13 @@ function baselineDiffIndex() {
 function renderBaselines() {
   const host = $('#baselines');
   $('#blCount').textContent = String(state.baselines.length);
-  if (!state.baselines.length) {
-    host.innerHTML = '<div class="hint" style="padding:14px 12px;text-align:center">尚無基準版。採購包經工程確認後可凍結為 Baseline，再由它產生請購單。</div>';
-    return;
-  }
+  // 沒有基準版時整塊收起來（標題一起）。原本這裡放一段說明文字，
+  // 結果是一個永遠佔著畫面、只寫著「尚無」的空盒子 —— 那段說明在
+  // 「一鍵轉請購單」的流程裡本來就會講一次，不需要常駐在版面上。
+  const show = state.baselines.length > 0;
+  $('#hdBl').hidden = !show;
+  host.hidden = !show;
+  if (!show) { host.innerHTML = ''; return; }
   const byId = new Map(state.baselines.map((b) => [b.id, b]));
   host.innerHTML = state.baselines.slice().reverse().map((bl) => {
     const pkg = state.packages.find((p) => p.code === bl.packageCode);

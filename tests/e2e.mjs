@@ -553,12 +553,26 @@ await closeDialog(page, 6);
 ok('右欄出現發包單', await page.locator('#pos .bl').count() === 1);
 ok('發包單計數正確', (await page.locator('#poCount').innerText()) === '1');
 
+// 有內容時這兩區要看得見 —— 「空的時候收起來」很容易退化成「永遠收起來」，
+// 那會讓已產生的 PR／PO 再也點不開（檢視、匯出、轉發包單、改狀態都走這裡）
+ok('有基準版時「基準版 / 請購單」區塊顯示出來', await page.locator('#hdBl').isVisible());
+ok('有發包單時「發包單 (PO)」區塊顯示出來', await page.locator('#hdPo').isVisible());
+
 // 還原，不要污染後面的段落
 await page.evaluate(() => {
   const s = window.__takeoff.state;
   s.pos = []; s.prs = []; s.baselines = []; s.packages = []; s.vendors = []; s.selected = new Set();
   window.__takeoff.renderAll();
 });
+
+// 清空之後要整塊收起來（標題也是）。使用者原本看到的是兩個只寫著「尚無」
+// 的空盒子，永遠佔著右欄一半的高度。
+ok('沒有基準版時「基準版 / 請購單」整塊隱藏', !(await page.locator('#hdBl').isVisible()));
+ok('沒有發包單時「發包單 (PO)」整塊隱藏', !(await page.locator('#hdPo').isVisible()));
+ok('連清單容器也一起收掉，不留空白區塊',
+  !(await page.locator('#baselines').isVisible()) && !(await page.locator('#pos').isVisible()));
+// 廠商主檔原本掛在 PO 標題列上 —— 標題一隱藏那顆鍵就永遠按不到了
+ok('「廠商主檔」在區塊隱藏時仍然按得到', await page.locator('#btnVendors').isVisible());
 
 console.log('\n【7】採購包與匯出');
 await page.locator('#tabList').click();
