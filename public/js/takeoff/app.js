@@ -25,6 +25,7 @@ import * as VD from './vendors.js';
 import * as PO from './po.js';
 import * as VF from './verify.js';
 import * as XL from './xlsx.js';
+import * as SH from './sheet.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -76,6 +77,7 @@ const state = {
   dims: null,          // 圖面標註 vs 幾何的比對 —— 圖面自己帶著答案，原本沒人去問它
   dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
   drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
+  sheetNos: {},        // 圖名 → 人工指定的圖號（A0-1）。人工填的優先，不會被自動解析蓋掉
   measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
   measureKey: '',      // 目前顯示的是哪一組量測
 };
@@ -192,6 +194,7 @@ function persist() {
       baselines: state.baselines, prs: state.prs,
       tasks: state.tasks, seqStart: state.seqStart, priceBase: state.priceBase,
       drawingSigs: state.drawingSigs,
+      sheetNos: state.sheetNos,
       vendors: state.vendors, pos: state.pos,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
@@ -226,6 +229,7 @@ function restore() {
     state.seqStart = d.seqStart || '';
     state.priceBase = d.priceBase || null;
     state.drawingSigs = d.drawingSigs || {};
+    state.sheetNos = d.sheetNos || {};
     state.vendors = d.vendors || [];
     state.pos = d.pos || [];
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
@@ -789,6 +793,7 @@ async function loadDxfFile(file, buf, sig) {
   state.viewer.loadDxf(doc);
   switchMeasureContext(measureKeyOf(file.name, sig, 1));
   $('#drawName').textContent = `${file.name} · ${doc.entities.length} 實體 · 單位 ${doc.units.name} · ${enc.encoding}`;
+  renderSheetChip();
   // 只在真的有風險時打斷使用者：解出無法辨識的字，或檔頭宣告被推翻。
   // 乾淨的推測不需要跳視窗嚇人 —— 用什麼編碼解的已經寫在狀態列了。
   if (enc.bad > 0 || enc.from === 'guess-after-bad-codepage') {
@@ -833,6 +838,7 @@ async function loadPdfFile(file, buf, sig) {
   await readFramedScale(pdf, 1);
   $('#drawName').textContent = `${file.name} · ${pdf.numPages} 頁`
     + (state.pdfScale && state.pdfScale.paper ? ` · ${state.pdfScale.paper.name}` : '');
+  renderSheetChip();
   const chip = $('#pageChip');
   chip.hidden = false;
   chip.innerHTML = `第 <b>1</b>/${pdf.numPages} 頁`;
@@ -879,6 +885,7 @@ async function loadDwgFile(file, buf, sig) {
         switchMeasureContext(measureKeyOf(file.name, sig, 1));
         runDupe();
         $('#drawName').textContent = `${file.name} · 經轉檔服務 · ${doc.entities.length} 實體`;
+        renderSheetChip();
         updateScaleChip(); renderMeasureList(); openLayers();
         return;
       }
@@ -917,6 +924,7 @@ async function loadDwgViaWasm(buf, name, sig) {
   switchMeasureContext(measureKeyOf(name, sig, 1));
   runDupe();
   $('#drawName').textContent = `${name} · WASM 解析 · ${doc.entities.length} 實體`;
+  renderSheetChip();
   updateScaleChip(); renderMeasureList(); openLayers();
 }
 
@@ -1439,9 +1447,9 @@ function exportPo(po) {
     ['未稅金額', po.subtotal], ['稅率', po.taxRate], ['稅額', po.tax], ['含稅合計', po.total],
     ['估價金額', po.estSubtotal], ['議價差額', po.variance],
     ['議價差額比例', po.variancePct == null ? '' : po.variancePct]];
-  const lines = [['工項代碼', 'ERP 料號', '名稱', '規格', '單位', '數量', '估價單價', '議定單價', '金額', '來源 PR'],
+  const lines = [['工項代碼', 'ERP 料號', '名稱', '規格', '單位', '數量', '估價單價', '議定單價', '金額', '圖號', '來源 PR'],
     ...po.lines.map((l) => [l.code, l.erpCode, l.name, l.spec, l.unit, l.qty,
-      l.estUnitPrice ?? '', l.unitPrice ?? '', l.amount ?? '', l.prNo])];
+      l.estUnitPrice ?? '', l.unitPrice ?? '', l.amount ?? '', l.sheetNo || '', l.prNo])];
   exportExcel(`發包單-${po.no}`, [{ name: '表頭', rows: head }, { name: '明細', rows: lines }]);
 }
 
@@ -1724,6 +1732,52 @@ function switchMeasureContext(key) {
 }
 
 /**
+ * 一張圖現在該用的圖號。
+ *
+ * 人工指定的存在 `state.sheetNos`（以檔名為鍵，會存檔），永遠優先；
+ * 沒指定時才由檔名推。推不出來就回 null —— 這裡刻意不退回檔名充數。
+ */
+function sheetNoFor(name) {
+  if (!name) return null;
+  return SH.sheetNoOf({ name, sheetNo: state.sheetNos[name] });
+}
+
+/** 目前載入這張圖的圖號。 */
+function curSheetNo() {
+  return state.drawing ? sheetNoFor(state.drawing.name) : null;
+}
+
+/**
+ * 一筆出處該顯示的圖號。
+ *
+ * 先查**現在**的對照表，再退回出處當時記下的值 ——
+ * 順序是刻意的：使用者常常是先抓完量、看到圖號欄空白才回頭去填。
+ * 若只認寫入當下記的值，那次補填就只會影響之後抓的量，
+ * 已經在清單上的幾十列永遠是空的，等於這個欄位沒用。
+ */
+function provSheet(prov) {
+  if (!prov) return '';
+  const live = prov.drawing ? (state.sheetNos[prov.drawing] || '').trim() : '';
+  return live || SH.sheetCell(prov);
+}
+
+/**
+ * 把目前的圖號對照表寫回每一筆出處紀錄。
+ *
+ * 下游（基準版快照、請購單、發包單）讀的是 `provenance.sheetNo`，不是這張對照表 ——
+ * 那些是凍結過的文件，必須自己帶著當時的值，不能事後被改。
+ * 所以編輯圖號的當下就把值推下去，之後凍結的東西才帶得到正確的圖號；
+ * 已經凍結的則維持原樣，這是對的。
+ */
+function syncProvSheets() {
+  for (const it of state.items) {
+    if (!it.provenance || !it.provenance.drawing) continue;
+    const no = provSheet(it.provenance);
+    if (no) it.provenance.sheetNo = no;
+  }
+}
+
+/**
  * 登記這次載入的圖，並回報它是不是同一張圖的新版本。
  *
  * 同名不同內容 = 圖改版了。這是判斷「清單裡那些圖面量是不是過期」的唯一可靠訊號 ——
@@ -1914,7 +1968,7 @@ function unloadDrawing() {
   renderDupeChip(); renderVerifyChip();
   $('#drawName').textContent = '未載入圖面';
   $('#pageChip').hidden = true;
-  renderCalcChip(); updateScaleChip(); renderMeasureList(); persist();
+  renderCalcChip(); updateScaleChip(); renderSheetChip(); renderMeasureList(); persist();
 }
 
 /* ══════════ 比例與量測 ══════════ */
@@ -2000,6 +2054,60 @@ function applyCalibrationToItems(info) {
     }
   }
   renderAll();
+}
+
+/**
+ * 工具列上的圖號膠囊。
+ *
+ * 為什麼要有這顆：使用者要的是「這一列的量出自 A0-1」，
+ * 而圖號**不在檔案裡** —— DXF 沒有標準欄位放它，PDF 也沒有。
+ * 唯一可靠的來源是人。所以這裡把「推得到／推不到」明白分開顯示：
+ * 推得到的標「（由檔名推）」，推不到的直接寫「未設圖號」並且是警示色，
+ * 讓人一眼知道匯出去的那一欄現在是空的。
+ */
+function renderSheetChip() {
+  const el = $('#sheetChip');
+  if (!el) return;
+  if (!state.drawing) { el.hidden = true; return; }
+  el.hidden = false;
+  const manual = (state.sheetNos[state.drawing.name] || '').trim();
+  const guess = SH.parseSheetNo(state.drawing.name);
+  const no = manual || guess.no;
+  el.className = 'chip ' + (manual ? 'ok' : no ? '' : 'warn');
+  el.textContent = no ? `圖號 ${no}${manual ? '' : '（由檔名推）'}` : '未設圖號';
+  el.title = no
+    ? `${manual ? '人工指定' : guess.how}。按一下可修改；會標註在每一列的數量出處，也會匯出成獨立的「圖號」欄。`
+    : `${guess.why}。按一下可手動填入 —— 不填的話匯出的「圖號」欄會是空白。`;
+  el.onclick = openSheetNo;
+}
+
+/**
+ * 設定這張圖的圖號。
+ *
+ * 填下去之後，**已經抓好的量也會一起標上** —— 使用者通常是先抓完量、
+ * 看到圖號欄空白才回頭補。若只影響之後抓的量，這個欄位等於沒用。
+ */
+function openSheetNo() {
+  if (!state.drawing) return;
+  const name = state.drawing.name;
+  const manual = (state.sheetNos[name] || '').trim();
+  const guess = SH.parseSheetNo(name);
+  const n = state.items.filter((it) => it.provenance && it.provenance.drawing === name).length;
+  dialog('這張圖的圖號', `
+    <p class="hint">檔案：${esc(name)}</p>
+    <label class="f">圖號（例：A0-1、E-01、結05）</label>
+    <input type="text" id="snVal" value="${esc(manual || guess.no || '')}" placeholder="留白代表不標註">
+    <p class="hint" style="margin-top:6px">${guess.no
+      ? `程式從檔名推得 <b>${esc(guess.no)}</b>（${esc(guess.how)}）。不對就直接改掉 —— 你填的不會再被自動解析蓋回去。`
+      : `程式<b>推不出來</b>：${esc(guess.why)}。<br>圖號不在檔案裡 —— DXF／PDF 都沒有標準欄位放它，只能由人填。
+         推不到時工具刻意留白，不會拿檔名充數：空白看得出來要補，錯的圖號看起來是對的，會一路跟著請購單、發包單、驗收單跑。`}</p>
+    <p class="hint">目前有 <b>${n}</b> 筆工項的圖面量出自這張圖，改了之後這 ${n} 筆會一起更新。</p>`,
+    [{ label: '取消' }, { label: '儲存', primary: true, fn: () => {
+      const v = $('#snVal').value.trim();
+      if (v) state.sheetNos[name] = v; else delete state.sheetNos[name];
+      syncProvSheets();
+      renderSheetChip(); renderAll(); persist();
+    } }]);
 }
 
 function updateScaleChip() {
@@ -2190,7 +2298,8 @@ function openAssign(mid) {
         const info = v.scaleInfo();
         it.calibration = info.method; it.calibrationRms = info.rms ?? 0;
         it.provenance = {
-          kind: 'measure', drawing: state.drawing ? state.drawing.name : '', page: state.drawing && state.drawing.pageNo,
+          kind: 'measure', drawing: state.drawing ? state.drawing.name : '', sheetNo: curSheetNo(),
+          page: state.drawing && state.drawing.pageNo,
           measurements: [...((it.provenance && it.provenance.measurements) || []), { id: m.id, type: m.type, value: e.value, factor: f }],
           at: new Date().toISOString(),
         };
@@ -2539,7 +2648,8 @@ function openLayers() {
           it.calibration = 'native';
           it.calibrationRms = 0;
           it.closed = it.measureType === 'area' ? g.closedCount > 0 : it.closed;
-          it.provenance = { kind: 'dxf-layer', drawing: state.drawing ? state.drawing.name : '', layer: g.layer, at: new Date().toISOString() };
+          it.provenance = { kind: 'dxf-layer', drawing: state.drawing ? state.drawing.name : '', sheetNo: curSheetNo(),
+            layer: g.layer, at: new Date().toISOString() };
           n++;
         });
         // 漏項要接成金額保留 —— 在總價裡歸零是系統性低估，比估得不準危險
@@ -3510,8 +3620,7 @@ function sourceNote(it, k) {
   if (k === 'drawing') {
     const p = it.provenance;
     if (!p) return it.drawingSource === 'auto' ? '圖層自動彙總' : '未連結圖面';
-    const base = p.kind === 'dxf-layer' ? `圖層 ${p.layer}｜${p.drawing}`
-      : `量測 ${(p.measurements || []).length} 筆｜${p.drawing}${p.page ? ' p.' + p.page : ''}`;
+    const base = SH.provenanceLabel({ ...p, sheetNo: provSheet(p) });
     return it.drawingStale ? `${base}（此圖已改版，本數量為舊版）` : base;
   }
   if (k === 'manual') return it.manualNote || '（未填理由）';
@@ -3803,7 +3912,7 @@ function exportScope(items, label) {
   }
   return {
     label, total: items.length,
-    drawings: [...byDrawing.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n),
+    drawings: [...byDrawing.entries()].map(([name, n]) => ({ name, n, sheetNo: sheetNoFor(name) })).sort((a, b) => b.n - a.n),
     withDrawing: items.length - noDrawing - noProv,
     noDrawing, noProv, stale,
     current: state.drawing ? state.drawing.name : null,
@@ -3822,12 +3931,17 @@ function scopeHtml(sc) {
         同一份清單裡的圖面量可能來自不同張圖，也可能根本不是從圖上量的。</p>
 
       ${sc.drawings.length ? `<table class="mat" style="margin-top:8px">
-        <thead><tr><th>圖面量的出處</th><th class="n">工項數</th></tr></thead><tbody>
-        ${sc.drawings.map((d) => `<tr><td>${esc(d.name)}${sc.current === d.name ? ' <span class="chip acc">目前載入</span>' : ''}</td>
+        <thead><tr><th>圖號</th><th>圖面量的出處</th><th class="n">工項數</th></tr></thead><tbody>
+        ${sc.drawings.map((d) => `<tr>
+          <td>${d.sheetNo ? `<b>${esc(d.sheetNo)}</b>` : '<span class="chip warn">未設圖號</span>'}</td>
+          <td>${esc(d.name)}${sc.current === d.name ? ' <span class="chip acc">目前載入</span>' : ''}</td>
           <td class="n">${d.n}</td></tr>`).join('')}
-        ${sc.noProv ? `<tr><td class="hint">有圖面量但沒記錄出處</td><td class="n">${sc.noProv}</td></tr>` : ''}
-        ${sc.noDrawing ? `<tr><td class="hint">沒有圖面量（數量來自 BOQ／人工確認／計算式）</td><td class="n">${sc.noDrawing}</td></tr>` : ''}
-        </tbody></table>`
+        ${sc.noProv ? `<tr><td></td><td class="hint">有圖面量但沒記錄出處</td><td class="n">${sc.noProv}</td></tr>` : ''}
+        ${sc.noDrawing ? `<tr><td></td><td class="hint">沒有圖面量（數量來自 BOQ／人工確認／計算式）</td><td class="n">${sc.noDrawing}</td></tr>` : ''}
+        </tbody></table>
+        ${sc.drawings.some((d) => !d.sheetNo) ? `<p class="hint" style="margin-top:6px">
+          標「未設圖號」的圖，匯出檔的<b>圖號欄會是空白</b> —— 圖號不在檔案裡，程式從檔名推不出來時不會硬湊一個。
+          要補：載入那張圖，按工具列上的圖號膠囊填進去。</p>` : ''}`
     : `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
         這 ${sc.total} 個工項<b>都沒有圖面量</b> —— 數量來自 BOQ、人工確認或計算式，不是從圖上量出來的。</p>`}
 
@@ -3928,13 +4042,14 @@ function itemRow(it) {
     c.score, c.band, it.wasteRate ?? state.settings.defaultWasteRate,
     p.suggestQty, p.orderQty, p.orderUnit, p.deliveredQty, it.unitPrice, p.cost,
     pay.label, pay.note, it.leadTimeDays, it.manualBy, it.manualNote,
-    it.provenance ? (it.provenance.kind === 'dxf-layer' ? `圖層:${it.provenance.layer}@${it.provenance.drawing}` : `量測@${it.provenance.drawing}`) : '',
+    provSheet(it.provenance),
+    it.provenance ? SH.provenanceLabel({ ...it.provenance, sheetNo: provSheet(it.provenance) }) : '',
   ];
 }
 
 const CSV_HEAD = ['WBS', '工項代碼', '名稱', '規格', '單位', '圖面量', 'BOQ量', '差異量', '差異率', '人工確認',
   '正式採購基準', '狀態', '判定規則', '可信度分數', '可信度等級', '損耗率', '建議採購量', '下單量', '訂購單位',
-  '到貨量', '單價', '預估金額', '計價影響', '計價說明', '前置期(天)', '簽核人', '確認理由', '數量出處'];
+  '到貨量', '單價', '預估金額', '計價影響', '計價說明', '前置期(天)', '簽核人', '確認理由', '圖號', '數量出處'];
 
 function openExport() {
   dialog('匯出', `
@@ -4262,6 +4377,7 @@ async function openDocInViewer(id) {
     state.drawing = { name: d.name, kind: 'dxf', doc: d._doc };
     state.viewer.loadDxf(d._doc);
     $('#drawName').textContent = `${d.name} · ${d._doc.entities.length} 實體 · 單位 ${d._doc.units.name}`;
+    renderSheetChip();
     $('#pageChip').hidden = true;
   } else if (d._file) {
     await loadPdfFile(d._file);
@@ -4570,4 +4686,6 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, VF, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, VF, SH,
+  runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet,
+  sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope };

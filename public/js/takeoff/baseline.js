@@ -103,6 +103,9 @@ export function snapshotItem(item, settings) {
     suggestQty: p.suggestQty, orderQty: p.orderQty, orderUnit: p.orderUnit,
     deliveredQty: p.deliveredQty, unitPrice: Q.isNum(item.unitPrice) ? item.unitPrice : null,
     cost: p.cost, score: c.score, band: c.band, leadTimeDays: item.leadTimeDays || 0,
+    // 圖號要跟著凍結。基準版是「這個數量當時依據什麼」的證據，
+    // 少了出自哪張圖，事後要對帳只能靠記憶。
+    sheetNo: (item.provenance && item.provenance.sheetNo) || '',
   };
 }
 
@@ -236,7 +239,10 @@ export function createPr(baseline, payload = {}, existingNos = []) {
       qty, unitPrice: price,
       amount: Q.isNum(price) && Q.isNum(qty) ? Q.roundTo(price * qty, 2) : null,
       needDate: payload.needDate || '',
-      note: `WBS ${s.wbs}｜可信度 ${s.band}${s.band === 'A' ? '' : `（${s.score}）`}`,
+      sheetNo: s.sheetNo || '',
+      // 圖號放進 note 而不是另開一欄：ERP 匯入表的欄位順序是對外契約，
+      // 多一欄會讓對方的匯入設定失效。note 本來就是自由欄位，放這裡不會弄壞任何人。
+      note: `WBS ${s.wbs}｜可信度 ${s.band}${s.band === 'A' ? '' : `（${s.score}）`}${s.sheetNo ? `｜圖號 ${s.sheetNo}` : ''}`,
     };
   });
   const subtotal = Q.roundTo(lines.reduce((a, l) => a + (Q.isNum(l.amount) ? l.amount : 0), 0), 2);

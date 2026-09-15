@@ -1765,6 +1765,93 @@ await page.evaluate((keep) => {
   window.__takeoff.renderAll();
 }, scopeBefore);
 
+console.log('\n【7之十二】每一列要標出自哪一張圖（圖號）');
+// 使用者：「可以在每列後頭備註出自那張圖面 例：A0-1」。
+// 重點是**圖號**不是檔名 —— 圖號是工地、業主、設計單位在用的編號。
+// 而圖號不在檔案裡：DXF 與 PDF 都沒有標準欄位放它，只能由檔名推或由人填。
+// 所以這一段測的主要是「推不到的時候有沒有安分地留白」。
+const sheetBefore = await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  const keep = {};
+  const set = (code, drawing) => {
+    const it = s.itemByCode.get(code);
+    keep[code] = { p: it.provenance || null, q: it.qty.drawing };
+    it.qty.drawing = 100;
+    it.provenance = { kind: 'dxf-layer', drawing, layer: 'E-CABLE', measurements: [], at: '' };
+  };
+  set('321.01', 'A0-1_電氣平面圖.dwg');   // 推得到
+  set('321.02', '電氣平面圖.dwg');        // 推不到 —— 要留白
+  keep.__sheetNos = { ...s.sheetNos };
+  window.__takeoff.renderAll();
+  return keep;
+});
+
+const sheetCols = await page.evaluate(() => {
+  const T = window.__takeoff;
+  const s = T.state;
+  const i = T.CSV_HEAD.indexOf('圖號');
+  const row = (code) => T.itemRow(s.itemByCode.get(code));
+  return { i, head: T.CSV_HEAD, a: row('321.01'), b: row('321.02') };
+});
+ok('匯出表有獨立的「圖號」欄', sheetCols.i >= 0, sheetCols.head.join(','));
+ok('圖號欄排在每一列的後段（在「數量出處」旁邊）',
+  sheetCols.head[sheetCols.i + 1] === '數量出處', sheetCols.head.slice(-4).join(','));
+ok('檔名推得出圖號時，欄位填 A0-1', sheetCols.a[sheetCols.i] === 'A0-1', String(sheetCols.a[sheetCols.i]));
+ok('推不出圖號時留白，不拿檔名充數',
+  sheetCols.b[sheetCols.i] === '', JSON.stringify(sheetCols.b[sheetCols.i]));
+ok('數量出處同時說明圖號與那張圖上的哪裡',
+  /A0-1/.test(sheetCols.a[sheetCols.i + 1]) && /E-CABLE/.test(sheetCols.a[sheetCols.i + 1]),
+  String(sheetCols.a[sheetCols.i + 1]));
+
+// 人工補圖號：已經抓好的量要一起更新，否則這個欄位等於沒用
+const afterManual = await page.evaluate(() => {
+  const T = window.__takeoff;
+  T.state.sheetNos['電氣平面圖.dwg'] = 'E-07';
+  T.syncProvSheets();
+  const i = T.CSV_HEAD.indexOf('圖號');
+  const row = T.itemRow(T.state.itemByCode.get('321.02'));
+  return { cell: row[i], prov: T.state.itemByCode.get('321.02').provenance.sheetNo };
+});
+ok('人工補的圖號會回填到已經抓好的量上', afterManual.cell === 'E-07', String(afterManual.cell));
+ok('並寫進出處紀錄，讓之後凍結的基準版／請購單帶得到',
+  afterManual.prov === 'E-07', String(afterManual.prov));
+
+// 人工填的優先，不會被自動解析蓋掉
+const override = await page.evaluate(() => {
+  const T = window.__takeoff;
+  T.state.sheetNos['A0-1_電氣平面圖.dwg'] = 'E-99';
+  T.syncProvSheets();
+  const i = T.CSV_HEAD.indexOf('圖號');
+  return T.itemRow(T.state.itemByCode.get('321.01'))[i];
+});
+ok('人工指定的圖號蓋過檔名推得的值', override === 'E-99', String(override));
+
+// 匯出範圍摘要要依圖號分組，並點名哪幾張還沒有圖號
+const scopeSheet = await page.evaluate(() => {
+  const T = window.__takeoff;
+  T.state.sheetNos = {};
+  T.state.items.forEach((it) => { if (it.provenance) delete it.provenance.sheetNo; });
+  const sc = T.exportScope(T.state.items, '測試');
+  return sc.drawings.map((d) => ({ name: d.name, no: d.sheetNo }));
+});
+ok('匯出範圍逐張帶出圖號',
+  scopeSheet.some((d) => d.name === 'A0-1_電氣平面圖.dwg' && d.no === 'A0-1'), JSON.stringify(scopeSheet));
+ok('推不出圖號的那張圖標成沒有圖號，不填檔名',
+  scopeSheet.some((d) => d.name === '電氣平面圖.dwg' && !d.no), JSON.stringify(scopeSheet));
+
+// 還原
+await page.evaluate((keep) => {
+  const s = window.__takeoff.state;
+  s.sheetNos = keep.__sheetNos || {};
+  for (const [code, v] of Object.entries(keep)) {
+    if (code.startsWith('__')) continue;
+    const it = s.itemByCode.get(code);
+    it.provenance = v.p;
+    it.qty.drawing = v.q;
+  }
+  window.__takeoff.renderAll();
+}, sheetBefore);
+
 console.log('\n【8】重整後狀態保留');
 const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);
 ok('（前置）331.01 確實有圖面量可供驗證持久化', typeof drawBefore === 'number', String(drawBefore));

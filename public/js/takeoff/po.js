@@ -139,6 +139,7 @@ export function createPo(pr, vendor, payload = {}, existingPos = []) {
     const neg = isNum(want.unitPrice) ? want.unitPrice : est;
     lines.push({
       prNo: pr.no, code, erpCode: src.erpCode || '', name: src.name, spec: src.spec || '',
+      sheetNo: src.sheetNo || '',
       unit: src.unit, qty: r2(qty),
       estUnitPrice: est,                       // 估價時的單價 —— 不覆蓋，這是回饋估價的唯一依據
       unitPrice: neg,                          // 議定單價

@@ -237,7 +237,15 @@ table.mkt tr.none td{opacity:.72}
 .rfi td{padding:2px 6px;border-top:1px solid var(--line2);vertical-align:top}
 .rfi td:first-child{color:var(--ink3);width:74px;white-space:nowrap}
 .rfi td:last-child{color:var(--ink3);width:150px;text-align:right}
-.toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);
+  /* 刻意 nowrap＋橫向捲動，不換行。
+     這一列換行會把畫布高度吃掉，而畫布尺寸會改變點擊的像素吸附誤差 ——
+     也就是說「工具列多一顆膠囊」會讓所有量測值出現肉眼看不出來的偏差。
+     這個坑已經踩過三次。改成不換行之後，之後再加幾顆膠囊都不會動到畫布。 */
+  flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.toolbar::-webkit-scrollbar{display:none}
+.toolbar>*{flex:none}
+.toolbar>.spacer{flex:1 0 auto}
 #cv{flex:1;min-height:220px;width:100%;display:block;background:var(--paper);touch-action:none}
 .viewfoot{display:flex;gap:10px;align-items:center;padding:5px 10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
 .mlist{max-height:150px;overflow:auto;border-top:1px solid var(--line)}
@@ -438,6 +446,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
           <button class="chip" id="calcChip" hidden title="查看圖面計算式的驗算結果" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
           <button class="chip" id="dupChip" hidden title="重複描繪偵測：重複的線會讓長度直接翻倍" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
           <button class="chip" id="vfChip" hidden title="驗算報告：程式讀出來的尺寸與數量，哪些驗過、哪些沒得驗" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <button class="chip" id="sheetChip" hidden title="這張圖的圖號。會標註在每一列的數量出處，也會匯出成獨立欄位" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
           <span class="chip" id="scaleChip">比例：未設定</span>
         </div>
         <canvas id="cv"></canvas>
