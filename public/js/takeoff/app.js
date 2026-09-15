@@ -19,6 +19,7 @@ import * as U from './units.js';
 import * as SV from './survey.js';
 import * as PS from './pdfscale.js';
 import * as LM from './layermatch.js';
+import * as DD from './dedupe.js';
 import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
@@ -64,6 +65,7 @@ const state = {
   survey: null,        // 座標與單位合理性檢查
   pdfScale: null,      // 從 PDF 圖框讀到的比例宣告
   surveyFixed: null,   // 使用者確認過的單位修正
+  dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
   drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
   measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
   measureKey: '',      // 目前顯示的是哪一組量測
@@ -536,6 +538,7 @@ function wire() {
   $('#btnMarket').onclick = openMarket;
   $('#calcChip').onclick = openCalcSheet;
   $('#btnDrawReset').onclick = openDrawingReset;
+  $('#dupChip').onclick = openDupe;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -756,6 +759,7 @@ async function loadDxfFile(file, buf, sig) {
   renderMeasureList();
   detectCalcSheet(doc, file.name);
   checkSurvey(doc);
+  runDupe();
   if (!doc.units.toM) {
     dialog('圖檔未定義單位', `<p>此 DXF 的 <code>$INSUNITS</code> 為「未定義」，無法自動換算成公尺。請指定圖檔單位：</p>
       <div class="fgrid">${[[0.001, '公厘 mm'], [0.01, '公分 cm'], [1, '公尺 m'], [0.0254, '英吋 in']].map(([v, l]) =>
@@ -778,8 +782,8 @@ async function loadPdfFile(file, buf, sig) {
   const pdf = await pdfjs.getDocument({ data: buf.slice(0) }).promise;
   state.drawing = { name: file.name, kind: 'pdf', pdf, pageNo: 1, pages: pdf.numPages, sig };
   // PDF 沒有 DXF 那一路的計算式表；不重設的話上一張 DXF 的晶片會留在工具列上
-  state.calc = null; state.encoding = null; state.survey = null;
-  renderCalcChip();
+  state.calc = null; state.encoding = null; state.survey = null; state.dupe = null;
+  renderCalcChip(); renderDupeChip();
   await state.viewer.loadPdf(pdf, 1);
   switchMeasureContext(measureKeyOf(file.name, sig, 1));
   await readFramedScale(pdf, 1);
@@ -829,6 +833,7 @@ async function loadDwgFile(file, buf, sig) {
         state.drawing = { name: file.name, kind: 'dwg', doc, via: 'server', sig };
         state.viewer.loadDxf(doc);
         switchMeasureContext(measureKeyOf(file.name, sig, 1));
+        runDupe();
         $('#drawName').textContent = `${file.name} · 經轉檔服務 · ${doc.entities.length} 實體`;
         updateScaleChip(); renderMeasureList(); openLayers();
         return;
@@ -866,8 +871,113 @@ async function loadDwgViaWasm(buf, name, sig) {
   state.drawing = { name, kind: 'dwg', doc, via: 'wasm', sig };
   state.viewer.loadDxf(doc);
   switchMeasureContext(measureKeyOf(name, sig, 1));
+  runDupe();
   $('#drawName').textContent = `${name} · WASM 解析 · ${doc.entities.length} 實體`;
   updateScaleChip(); renderMeasureList(); openLayers();
+}
+
+/**
+ * 自動抓量的結果報告 —— 重點不是「寫進去幾個」，是**沒寫進去的有哪些、為什麼**。
+ *
+ * 使用者要的就是這個：「無法分辨」的擋住不讓套用，但列於最後的漏項。
+ * 一份只講成功數的報告，會讓人以為剩下的都不重要；
+ * 漏項清單讓「這一層沒算到」變成一件看得見、要處理的事。
+ */
+function openTakeoffReport(written, missed) {
+  const order = { bad: 0, warn: 1, info: 2 };
+  const rows = missed.slice().sort((a, b) => order[a.level] - order[b.level])
+    .map((x) => `<tr><td><span class="chip ${x.level === 'bad' ? 'bad' : x.level === 'warn' ? 'warn' : ''}">${
+      x.level === 'bad' ? '擋下' : x.level === 'warn' ? '注意' : '未對映'}</span></td>
+      <td>${esc(x.layer)}</td><td class="hint">${esc(x.why)}</td></tr>`).join('');
+  const blocked = missed.filter((x) => x.level === 'bad').length;
+  dialog('自動抓量結果', `
+    <p>已從 <b>${written}</b> 個圖層寫入圖面量${blocked ? `，<b class="bad">${blocked} 個被擋下</b>` : ''}。</p>
+    ${missed.length ? `<h4 style="margin:12px 0 6px">漏項清單（${missed.length}）</h4>
+      <table class="mat"><thead><tr><th style="width:74px">狀態</th><th>圖層</th><th>原因</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <p class="hint" style="margin-top:8px"><b>「擋下」的必須處理，不能當成沒看見。</b>
+      重複描繪回 CAD 清乾淨後重新匯出；無法分辨的請人工指定工項，或請設計單位把不同規格分層。
+      「未對映」多半是註記層、圖框層，通常可以忽略 —— 但請確認清單上不該有的工項沒有因此漏掉。</p>`
+      : '<p class="chip ok" style="display:block;padding:9px 11px">沒有漏項，每一個圖層都有處置。</p>'}
+    <p class="hint">請切回清單檢查差異欄與可信度。自動抓量的結果標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。</p>`);
+}
+
+/* ══════════ 重複描繪 ══════════ */
+
+/**
+ * 重複描繪偵測的容差，換算成圖檔單位的 1mm。
+ * 圖檔沒有單位時退回用圖幅對角線的百萬分之一 —— 不能用絕對值，
+ * 因為圖檔單位可能是公尺也可能是公厘，差了一千倍。
+ */
+function dupeTol(v) {
+  if (v.metersPerUnit) return 0.001 / v.metersPerUnit;
+  const b = v.bounds;
+  const diag = Math.hypot((b.maxX - b.minX) || 1, (b.maxY - b.minY) || 1);
+  return diag * 1e-6;
+}
+
+/**
+ * 跑一次重複描繪分析並更新工具列的晶片。
+ *
+ * 這件事排在所有自動化之前，理由使用者講得比我清楚：
+ * 對應猜錯了數字會不合理而被發現，重複描繪不會 ——
+ * 它給你一個完全合理、但是錯一倍的數字。
+ */
+function runDupe() {
+  const v = state.viewer;
+  state.dupe = (v.mode === 'dxf' && v.doc) ? DD.analyze(v.flat, { tol: dupeTol(v) }) : null;
+  renderDupeChip();
+}
+
+function renderDupeChip() {
+  const el = $('#dupChip');
+  if (!el) return;
+  const d = state.dupe;
+  if (!d) { el.hidden = true; return; }
+  el.hidden = false;
+  el.style.cursor = 'pointer';
+  if (d.clean) { el.className = 'chip ok'; el.textContent = '無重複描繪'; return; }
+  const bad = d.layers.filter((g) => DD.severity(g) === 'bad').length;
+  el.className = 'chip ' + (bad ? 'bad' : 'warn');
+  const toM = state.viewer.metersPerUnit;
+  el.textContent = `重複 ${toM ? Q.fmt(d.totals.duplicated * toM, 1) + ' M' : Q.fmt(d.totals.duplicated, 1)}`
+    + (d.totals.dupInserts ? ` · ${d.totals.dupInserts} 圖塊` : '');
+}
+
+/** 逐圖層攤開重複描繪的細節。 */
+function openDupe() {
+  const d = state.dupe;
+  if (!d) return dialog('尚未載入向量圖', '<p>重複描繪偵測需要 DXF／DWG 幾何。</p>');
+  const toM = state.viewer.metersPerUnit;
+  const L = (x) => (toM ? `${Q.fmt(x * toM, 2)} M` : Q.fmt(x, 1));
+  const dirty = d.layers.filter((g) => DD.severity(g) !== 'ok');
+  const rows = dirty.map((g) => {
+    const sv = DD.severity(g);
+    return `<tr class="${sv === 'bad' ? 'overdue' : 'urgent'}">
+      <td>${esc(g.layer)}</td>
+      <td class="n">${L(g.total)}</td>
+      <td class="n">${L(g.duplicated)}</td>
+      <td class="n">${(g.ratio * 100).toFixed(1)}%</td>
+      <td class="n">${g.dupInserts || '—'}</td>
+      <td><span class="chip ${sv === 'bad' ? 'bad' : 'warn'}">${sv === 'bad' ? '擋下' : '注意'}</span></td>
+    </tr>`;
+  }).join('');
+  dialog('重複描繪偵測', `
+    <p>容差 <b>${Q.fmt(d.tol, 4)}</b> 圖檔單位${toM ? `（≈ ${Q.fmt(d.tol * toM * 1000, 2)} mm）` : ''}。
+    「重複長度」＝ 總長 − 聯集長度：同一條直線上的線段投影成一維區間後取聯集，
+    差額就是被算了兩次以上的長度。這個定義不需要判斷「兩條線是不是同一條」，只需要幾何。</p>
+    ${d.clean ? '<p class="chip ok" style="display:block;padding:9px 11px">這張圖沒有偵測到重複描繪。</p>' : `
+    <table class="mat"><thead><tr><th>圖層</th><th class="n">總長</th><th class="n">重複長度</th>
+      <th class="n">佔比</th><th class="n">重疊圖塊</th><th>處置</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="hint" style="margin-top:8px">全圖合計重複 <b>${L(d.totals.duplicated)}</b>
+      （總長 ${L(d.totals.total)} 的 ${(d.totals.ratio * 100).toFixed(1)}%）
+      ${d.totals.dupInserts ? `、<b>${d.totals.dupInserts}</b> 個圖塊重疊插入` : ''}
+      ${d.totals.degenerate ? `、${d.totals.degenerate} 條零長度線` : ''}。</p>`}
+    <p class="hint"><b>「擋下」的圖層不會被自動抓量寫入。</b>
+    長度灌水 2% 以上、或有任何圖塊重疊插入，都算擋下 ——
+    圖塊重疊一個都不能放過，因為那是計數工項，多一個就是採購單上多一個。
+    請回 CAD 用 OVERKILL／清除重複物件處理後重新匯出，或改用量測工具逐段量。</p>`);
 }
 
 /* ══════════ 圖面版本與量測歸屬 ══════════ */
@@ -956,7 +1066,7 @@ function committedCodes() {
  * 而且「只清上一張圖產生的」永遠比「全部」安全。
  */
 function autoClearOnDrawingChange(prevName) {
-  const mode = state.settings.clearOnDrawingChange || 'keep';
+  const mode = state.settings.clearOnDrawingChange || 'prev';
   if (mode === 'keep') return null;
   const all = state.items.filter((it) => Q.isNum(it.qty.drawing));
   const targets = mode === 'all' ? all
@@ -1101,7 +1211,8 @@ function unloadDrawing() {
   v.layerVisible = {};
   v.render();
   state.drawing = null;
-  state.calc = null; state.encoding = null; state.survey = null; state.pdfScale = null;
+  state.calc = null; state.encoding = null; state.survey = null; state.pdfScale = null; state.dupe = null;
+  renderDupeChip();
   $('#drawName').textContent = '未載入圖面';
   $('#pageChip').hidden = true;
   renderCalcChip(); updateScaleChip(); renderMeasureList(); persist();
@@ -1629,26 +1740,37 @@ function openLayers() {
   const matches = agg.map((g) => matchLayer(g.layer, g));
   const auto = matches.filter((m) => m.best).length;
   const tied = matches.filter((m) => m.ambiguous.length).length;
+  // 重複描繪嚴重的圖層一律擋下，不讓它寫進數量。理由見 dedupe.js：
+  // 重複描繪給的是一個「完全合理但錯一倍」的數字，事後查不出來。
+  const dupOf = (layer) => (state.dupe ? state.dupe.byLayer.get(layer) : null);
+  const dupBad = (layer) => { const g = dupOf(layer); return !!g && DD.severity(g) === 'bad'; };
+  const blockedCount = agg.filter((g) => dupBad(g.layer)).length;
   const rows = agg.map((g, i) => {
     const m = matches[i];
+    const dg = dupOf(g.layer);
+    const barred = dupBad(g.layer);
     const blocks = Object.entries(g.blocks).map(([n, c]) => `${n}×${c}`).join('、');
-    const chip = m.best ? `<span class="chip ${m.band === 'high' ? 'ok' : 'acc'}">自動 ${m.score}</span>`
-      : m.ambiguous.length ? '<span class="chip bad">無法分辨</span>'
-        : m.band === 'blocked' ? '<span class="chip warn">型態不符</span>'
-          : '<span class="chip">需人工</span>';
-    return `<div class="layerrow">
+    // 無法分辨也要擋住不讓套用 —— 選了也寫不進去，並且會列進最後的漏項
+    const locked = barred || m.ambiguous.length > 0;
+    const chip = barred ? '<span class="chip bad">重複描繪</span>'
+      : m.best ? `<span class="chip ${m.band === 'high' ? 'ok' : 'acc'}">自動 ${m.score}</span>`
+        : m.ambiguous.length ? '<span class="chip bad">無法分辨</span>'
+          : m.band === 'blocked' ? '<span class="chip warn">型態不符</span>'
+            : '<span class="chip">需人工</span>';
+    const why = barred ? `重複描繪：${DD.describe(dg, toM)}` : LM.explain(m, nameOf);
+    return `<div class="layerrow" ${locked ? 'style="opacity:.72"' : ''}>
       <input type="checkbox" data-lv="${esc(g.layer)}" ${v.layerVisible[g.layer] === false ? '' : 'checked'} style="width:auto" title="顯示／隱藏">
       <span class="lname" title="${esc(g.layer)}">${esc(g.layer)}</span>
       <span class="num" style="width:96px">${toM ? Q.fmt(g.length * toM, 1) + ' M' : Q.fmt(g.length, 1)}</span>
       <span class="num" style="width:96px">${toM ? Q.fmt(g.area * toM * toM, 1) + ' M²' : Q.fmt(g.area, 1)}</span>
       <span class="num" style="width:54px">${g.count}</span>
-      <select data-map="${i}" style="width:230px">
+      <select data-map="${i}" style="width:230px" ${locked ? 'disabled' : ''}>
         <option value="">— 不對映 —</option>
         ${state.items.map((it) => `<option value="${esc(it.code)}" ${m.best === it.code ? 'selected' : ''}>${esc(it.code)} · ${esc(it.name)}（${esc(it.unit)}）</option>`).join('')}
       </select>
       ${chip}
       <span class="hint" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-        title="${esc(LM.explain(m, nameOf))}${blocks ? ' ｜圖塊 ' + esc(blocks) : ''}">${esc(LM.explain(m, nameOf))}</span>
+        title="${esc(why)}${blocks ? ' ｜圖塊 ' + esc(blocks) : ''}">${esc(why)}</span>
     </div>`;
   }).join('');
   dialog('圖層彙總 → 工項自動抓量', `
@@ -1657,7 +1779,12 @@ function openLayers() {
       <span style="width:96px;text-align:right">面積</span><span style="width:54px;text-align:right">數量</span>
       <span style="width:230px">對映工項</span><span style="flex:1">判定依據</span></div>
     <div style="max-height:44vh;overflow:auto">${rows}</div>
-    <p class="hint"><b>${agg.length}</b> 個圖層：自動對應 <b>${auto}</b> 個${tied ? `、<b class="bad">${tied} 個無法分辨</b>` : ''}，其餘留白待人工指定。</p>
+    <p class="hint"><b>${agg.length}</b> 個圖層：自動對應 <b>${auto}</b> 個${tied ? `、<b class="bad">${tied} 個無法分辨</b>` : ''}${blockedCount ? `、<b class="bad">${blockedCount} 個因重複描繪被擋下</b>` : ''}，其餘留白待人工指定。</p>
+    ${blockedCount ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
+      有 <b>${blockedCount}</b> 個圖層偵測到重複描繪，已擋下不讓寫入。
+      重複描繪會讓長度<b>直接翻倍</b>，而且給出的數字完全合理 —— 事後查不出來，
+      比對應猜錯危險得多。請按工具列的「重複」晶片看細節，回 CAD 用 OVERKILL
+      清除重複物件後重新匯出，或改用量測工具逐段量。</p>` : ''}
     ${tied ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
       「無法分辨」是指有兩個以上的工項對到同一個圖層，而<b>幾何上看不出差別</b> ——
       例如 38mm² 與 22mm² 的電纜畫在同一層，線就是線，圖面本身沒有這個資訊。
@@ -1670,12 +1797,27 @@ function openLayers() {
     [{ label: '關閉' }, {
       label: '套用對映', primary: true, fn: () => {
         let n = 0;
-        $$('#dlgBody [data-map]').forEach((sel) => {
-          const code = sel.value; if (!code) return;
-          const g = agg[+sel.dataset.map];
+        const missed = [];   // 沒寫進去的，連同原因 —— 這就是最後的漏項清單
+        agg.forEach((g, i) => {
+          const m = matches[i];
+          const sel = $(`#dlgBody [data-map="${i}"]`);
+          const code = sel && !sel.disabled ? sel.value : '';
+          if (dupBad(g.layer)) {
+            return missed.push({ layer: g.layer, why: `重複描繪：${DD.describe(dupOf(g.layer), toM)}`, level: 'bad' });
+          }
+          if (m.ambiguous.length) {
+            return missed.push({ layer: g.layer,
+              why: `無法分辨：${m.ambiguous.map(nameOf).join(' / ')} 幾何上看不出差別`, level: 'bad' });
+          }
+          if (!code) {
+            if (m.band === 'blocked') return missed.push({ layer: g.layer, why: m.reasons.join('；'), level: 'warn' });
+            return missed.push({ layer: g.layer, why: '未對映到任何工項', level: 'info' });
+          }
           const it = state.itemByCode.get(code);
           const val = layerValueFor(it, g, toM);
-          if (val == null) return;
+          if (val == null) {
+            return missed.push({ layer: g.layer, why: `算不出 ${it.measureType} 的量（可能是圖檔未定義單位）`, level: 'warn' });
+          }
           it.qty.drawing = Q.roundTo(val, 4);
           it.drawingSource = 'auto';
           freshDrawingQty(it);
@@ -1686,8 +1828,8 @@ function openLayers() {
           it.provenance = { kind: 'dxf-layer', drawing: state.drawing ? state.drawing.name : '', layer: g.layer, at: new Date().toISOString() };
           n++;
         });
-        renderAll();
-        if (n) setTimeout(() => dialog('已套用', `<p>已從 ${n} 個圖層寫入圖面量。請切回清單檢查差異欄與可信度。</p>`), 60);
+        renderAll(); persist();
+        setTimeout(() => openTakeoffReport(n, missed), 60);
       },
     }], (body) => {
       body.addEventListener('change', (e) => {
@@ -2684,8 +2826,8 @@ function openSettings() {
       <div><label class="f">轉採購最低可信度</label><select id="sGate">${['A', 'B', 'C', 'D'].map((b) => `<option ${s.gateBand === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
       <div><label class="f">合約型態</label><select id="sContract">${Object.values(Q.CONTRACT_TYPES).map((c) => `<option value="${c.key}" ${s.contractType === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
       <div><label class="f">換圖時的圖面量</label><select id="sClearDraw">
-        <option value="keep" ${(s.clearOnDrawingChange || 'keep') === 'keep' ? 'selected' : ''}>保留（預設）</option>
-        <option value="prev" ${s.clearOnDrawingChange === 'prev' ? 'selected' : ''}>清除上一張圖產生的</option>
+        <option value="keep" ${s.clearOnDrawingChange === 'keep' ? 'selected' : ''}>保留</option>
+        <option value="prev" ${(s.clearOnDrawingChange || 'prev') === 'prev' ? 'selected' : ''}>清除上一張圖產生的（預設）</option>
         <option value="all" ${s.clearOnDrawingChange === 'all' ? 'selected' : ''}>清除全部圖面量</option>
       </select></div>
       <div><label class="f">RFI 擋採購的嚴重度</label><select id="sRfiGate">
@@ -3630,4 +3772,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

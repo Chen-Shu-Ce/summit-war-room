@@ -104,6 +104,15 @@ await closeDialog(page);
 
 await page.locator('#tabList').click();
 
+// 預設會在換圖時清掉上一張圖產生的圖面量（使用者指定）。
+// 先驗證這個預設確實生效，再把它關掉 —— 後面多數段落是「載入多張圖、
+// 數量要累積下去」的情境，開著會一直被清掉。〈7之六〉會自己再打開來測。
+ok('預設就是「清除上一張圖產生的圖面量」', await page.evaluate(() => {
+  const s = window.__takeoff.state.settings;
+  return (s.clearOnDrawingChange || 'prev') === 'prev';
+}));
+await page.evaluate(() => { window.__takeoff.state.settings.clearOnDrawingChange = 'keep'; });
+
 console.log('\n【1】版面與初始資料');
 ok('WBS 樹有節點', await page.locator('#tree .node').count() > 5);
 ok('BOM 表格有列', await page.locator('#boqBody tr[data-code]').count() > 10);
@@ -179,25 +188,39 @@ ok('對話框說明無法分辨的原因', (await page.locator('#dlgBody').inner
 ok('E-LITE 自動猜到照明工項', mapped.some(([l, v]) => l === 'E-LITE' && v.startsWith('331.')), JSON.stringify(mapped));
 ok('每一列都寫出判定依據，不是黑箱',
   (await page.locator('#dlgBody').innerText()).includes('圖層關鍵字'));
-// 人工指定 321.01，再套用 —— 驗證寫入路徑本身沒壞
-await page.evaluate(() => {
+// 「無法分辨」是擋住不讓套用，不是只給個警告 —— 下拉選單本身就是停用的
+ok('無法分辨的圖層，下拉選單被停用（擋住不讓套用）', await page.evaluate(() => {
   const sel = [...document.querySelectorAll('#dlgBody [data-map]')]
     .find((s) => s.parentElement.querySelector('.lname').textContent === 'E-CABLE-PWR');
-  sel.value = '321.01';
-  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  return !!sel && sel.disabled;
+}));
+// 幾何本身仍然算得出來 —— 被擋下的是「算到哪個工項」，不是「算不算得出來」
+// 電纜圖層 = 5000 + π/2·1000 + π·1000 mm = 9.712m
+const cableGeom = await page.evaluate(() => {
+  const g = window.__takeoff.DXF.aggregateByLayer(window.__takeoff.state.viewer.doc)
+    .find((x) => x.layer === 'E-CABLE-PWR');
+  return g.length * window.__takeoff.state.viewer.metersPerUnit;
 });
+ok('圖層幾何量算得正確 (9.7124 M)', Math.abs(cableGeom - 9.7124) < 0.001, String(cableGeom));
 await page.locator('#dlgFoot button.primary').click();
-await page.waitForTimeout(200);
+await page.waitForTimeout(300);
+ok('套用後給出的是結果報告，不是只報成功數',
+  (await page.locator('#dlgTitle').innerText()).includes('自動抓量結果'),
+  await page.locator('#dlgTitle').innerText());
+const report = await page.locator('#dlgBody').innerText();
+ok('漏項清單列出被擋下的圖層', report.includes('漏項清單') && report.includes('E-CABLE-PWR'), report.slice(0, 200));
+ok('並寫明被擋下的原因', report.includes('無法分辨'), report.slice(0, 260));
+await closeDialog(page, 4);
 const drawQty = await page.evaluate(() => {
   const s = window.__takeoff.state;
-  const cable = s.itemByCode.get('321.01');
-  const lite = s.itemByCode.get('331.01');
-  return { cable: cable.qty.drawing, cableSrc: cable.drawingSource, lite: lite.qty.drawing, prov: cable.provenance };
+  return { cable: s.itemByCode.get('321.01').qty.drawing,
+    lite: s.itemByCode.get('331.01').qty.drawing,
+    liteProv: s.itemByCode.get('331.01').provenance };
 });
-// 電纜圖層 = 5000 + π/2·1000 + π·1000 mm = 9.712m
-ok('電纜圖面量由圖層彙總寫入 (9.7124 M)', Math.abs(drawQty.cable - 9.7124) < 0.001, String(drawQty.cable));
+ok('被擋下的圖層沒有寫進任何數量', drawQty.cable !== 9.7124, String(drawQty.cable));
 ok('燈具計數由圖塊寫入 (4)', drawQty.lite === 4, String(drawQty.lite));
-ok('留下數量出處', drawQty.prov && drawQty.prov.kind === 'dxf-layer' && drawQty.prov.layer === 'E-CABLE-PWR', JSON.stringify(drawQty.prov));
+ok('留下數量出處', drawQty.liteProv && drawQty.liteProv.kind === 'dxf-layer'
+  && drawQty.liteProv.layer === 'E-LITE', JSON.stringify(drawQty.liteProv));
 
 console.log('\n【6】PDF 載入、比例校正與量測');
 await page.setInputFiles('#fileDrawing', join(FIX, 'fixture.pdf'));
@@ -205,6 +228,9 @@ await page.waitForFunction(() => window.__takeoff.state.viewer.mode === 'pdf' &&
 await page.waitForSelector('#dlg[open]');
 ok('PDF 未校正時警告', (await page.locator('#dlgBody').innerText()).includes('未設定比例'));
 await page.locator('#dlgFoot button').last().click();
+await page.waitForTimeout(300);
+// 換圖預設會清掉上一張圖產生的圖面量，並跳一次說明 —— 關掉再往下走
+await closeDialog(page, 4);
 await page.waitForSelector('#dlg[open]', { state: 'hidden' });
 ok('比例晶片顯示未設定', (await page.locator('#scaleChip').innerText()).includes('未設定'));
 
@@ -1286,7 +1312,72 @@ ok('測試自己造的採購包與基準版已還原', await page.evaluate((b) =
     && state.itemByCode.get('321.01').qty.drawing === b.qty['321.01'].q.drawing;
 }, snapBefore));
 
+console.log('\n【7之七】重複描繪偵測');
+// 使用者指定：「得先做重複線段偵測，那比任何自動化都優先。」
+// 理由是它靜默地把數量翻倍 —— 對應猜錯了數字會不合理而被發現，
+// 重複描繪不會，它給你一個完全合理、但是錯一倍的數字。
+// fixture-dupe.dxf 的每一個數字都是手算得出來的，見 tests/make-dupe-dxf.mjs。
+await page.locator('#tabView').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-dupe.dxf'));
+await page.waitForTimeout(1500);
+
+const dupe = await page.evaluate(() => {
+  const d = window.__takeoff.state.dupe;
+  const g = (l) => { const x = d.byLayer.get(l); return { dup: x.duplicated, ratio: x.ratio, ins: x.dupInserts,
+    sev: window.__takeoff.DD.severity(x) }; };
+  return { clean: d.clean, tray: g('E-TRAY'), lite: g('E-LIGHT-HB'), wire: g('E-WIRE'),
+    totals: d.totals, tol: d.tol };
+});
+ok('容差換算成圖檔單位的 1mm', Math.abs(dupe.tol - 1) < 1e-9, String(dupe.tol));
+ok('反向重合 + 部分重疊 = 12000（手算值）', dupe.tray.dup === 12000, String(dupe.tray.dup));
+ok('灌水 40% 判定為擋下', dupe.tray.sev === 'bad' && Math.abs(dupe.tray.ratio - 0.4) < 1e-9, JSON.stringify(dupe.tray));
+ok('同點同名圖塊多算 1 只', dupe.lite.ins === 1, JSON.stringify(dupe.lite));
+ok('圖塊重疊一律擋下（計數多一個就是採購單多一個）', dupe.lite.sev === 'bad');
+ok('首尾相接的乾淨圖層不誤報', dupe.wire.dup === 0 && dupe.wire.sev === 'ok', JSON.stringify(dupe.wire));
+ok('整張圖判為不乾淨', dupe.clean === false);
+
+// 工具列晶片
+ok('工具列出現重複描繪晶片', await page.locator('#dupChip').isVisible());
+const chipTxt = await page.locator('#dupChip').innerText();
+ok('晶片直接寫出重複多少公尺', chipTxt.includes('12.1') || chipTxt.includes('12.'), chipTxt);
+
+// 圖層對映對話框：被擋下的列要停用
+await closeDialog(page, 6);
+await page.locator('#btnLayers').click();
+await page.waitForSelector('#dlg[open]');
+const rowState = await page.evaluate(() => {
+  const out = {};
+  for (const sel of document.querySelectorAll('#dlgBody [data-map]')) {
+    out[sel.parentElement.querySelector('.lname').textContent] = sel.disabled;
+  }
+  return out;
+});
+ok('重複描繪的圖層下拉被停用', rowState['E-TRAY'] === true && rowState['E-LIGHT-HB'] === true, JSON.stringify(rowState));
+ok('乾淨的圖層不受影響', rowState['E-WIRE'] === false, JSON.stringify(rowState));
+const layTxt = await page.locator('#dlgBody').innerText();
+ok('對話框說明被擋下的原因與處置', layTxt.includes('重複描繪') && layTxt.includes('OVERKILL'), layTxt.slice(0, 160));
+
+// 套用 → 漏項清單要列出被擋下的圖層
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(400);
+const rep = await page.locator('#dlgBody').innerText();
+ok('漏項清單列出因重複描繪被擋下的圖層', rep.includes('E-TRAY') && rep.includes('重複描繪'), rep.slice(0, 220));
+await closeDialog(page, 6);
+
+// 重複描繪細節視窗
+await page.locator('#dupChip').click();
+await page.waitForSelector('#dlg[open]');
+const dupTxt = await page.locator('#dlgBody').innerText();
+ok('細節視窗逐圖層攤開', dupTxt.includes('E-TRAY') && dupTxt.includes('40.0%'), dupTxt.slice(0, 220));
+ok('說明「重複長度 = 總長 − 聯集長度」的定義', dupTxt.includes('聯集'), dupTxt.slice(0, 160));
+await closeDialog(page, 6);
+
 console.log('\n【8】重整後狀態保留');
+const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);
+ok('（前置）331.01 確實有圖面量可供驗證持久化', typeof drawBefore === 'number', String(drawBefore));
 await page.reload();
 await page.waitForFunction(() => window.__takeoff && window.__takeoff.state.items.length > 0);
 const after = await page.evaluate(() => ({
@@ -1295,11 +1386,13 @@ const after = await page.evaluate(() => ({
   tasks: window.__takeoff.state.tasks.length,
   pkgs: window.__takeoff.state.packages.length,
   manual: window.__takeoff.state.itemByCode.get('710.01').qty.manual,
-  draw: window.__takeoff.state.itemByCode.get('321.01').qty.drawing,
+  draw: window.__takeoff.state.itemByCode.get('331.01').qty.drawing,
 }));
 ok('採購包持久化', after.pkgs === pkgTotal, `重整後 ${after.pkgs} / 預期 ${pkgTotal}`);
 ok('人工確認持久化', after.manual === 5600);
-ok('圖面量持久化', Math.abs(after.draw - 9.7124) < 0.001);
+// 321.01 已不再是好樣本：E-CABLE-PWR 因無法分辨而被擋下，本來就不會有圖面量。
+// 改用 331.01（由圖塊計數寫入 4 只）驗證圖面量確實存得住。
+ok('圖面量持久化', after.draw === drawBefore, `重整後 ${after.draw} / 重整前 ${drawBefore}`);
 ok('基準版與請購單持久化', after.baselines === 1 && after.prs === 1, JSON.stringify(after));
 ok('價格基準日持久化', await page.evaluate(() => !!window.__takeoff.state.priceBase));
 ok('工序持久化', after.tasks === 63, String(after.tasks));
