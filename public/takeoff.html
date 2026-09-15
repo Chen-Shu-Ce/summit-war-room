@@ -50,7 +50,31 @@ header.top{display:flex;align-items:center;gap:10px;padding:8px 14px;background:
 .brand{font-weight:700;letter-spacing:.2px;white-space:nowrap}
 .brand small{display:block;font-weight:400;color:var(--ink3);font-size:11px;letter-spacing:0}
 .spacer{flex:1}
-.cols{flex:1;display:grid;grid-template-columns:262px minmax(0,1fr) 340px;min-height:0}
+.cols{flex:1;display:grid;grid-template-columns:var(--wL,262px) minmax(0,1fr) var(--wR,340px);min-height:0}
+/* 收合左右欄，把空間讓給中間的 BOM 清單。
+   中欄是 minmax(0,1fr)，所以兩側一縮它就自動撐開 —— 不需要另外算寬度。 */
+.cols.lc{--wL:30px}
+.cols.rc{--wR:30px}
+.col.mini>*:not(h2):not(.minilab){display:none}
+.col.mini>h2{padding:9px 0;justify-content:center;gap:0}
+.col.mini>h2>*:not(.colx){display:none}
+.minilab{display:none}
+.rpane{display:none;flex-direction:column;min-height:0;flex:1}
+.rpane.on{display:flex}
+#rtabs button{padding:4px 9px;font-size:12px}
+#rtabs span{font-family:var(--mono);color:var(--ink3)}
+#rtabs button[aria-pressed="true"] span{color:#fff}
+.dsec{margin:0;padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--ink2);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;background:var(--panel);
+  position:sticky;top:0;z-index:2}
+.dsec .chip{margin-left:auto}
+.col.mini>.minilab{display:block;writing-mode:vertical-rl;text-orientation:mixed;
+  padding:10px 0;font-size:11px;color:var(--ink3);letter-spacing:2px;white-space:nowrap;
+  cursor:pointer;user-select:none}
+.col.mini>.minilab:hover{color:var(--accent)}
+.colx{border:0;background:transparent;color:var(--ink3);cursor:pointer;padding:0 3px;
+  font-size:13px;line-height:1;flex:none;border-radius:4px}
+.colx:hover{color:var(--accent);background:var(--line2)}
 .col{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
 .col+.col{border-left:1px solid var(--line)}
 .col>h2{margin:0;padding:9px 12px;font-size:12px;font-weight:700;letter-spacing:.4px;color:var(--ink2);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;background:var(--panel);position:sticky;top:0;z-index:3}
@@ -272,7 +296,12 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
 /* ── 窄螢幕 ── */
 .tabbar{display:none;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
 @media (max-width:1100px){
-  .cols{grid-template-columns:1fr}
+  /* 窄螢幕一次只顯示一欄，收合就沒有意義 —— 把欄寬變數整個蓋掉，
+     免得收合狀態殘留在設定裡、換到手機上看變成一條縫。 */
+  .cols,.cols.lc,.cols.rc{grid-template-columns:1fr}
+  .col.mini>*:not(h2){display:revert}
+  .col.mini>h2>*{display:revert}
+  .col.mini>.minilab{display:none}
   .col{display:none}
   .col.show{display:flex}
   .col+.col{border-left:0}
@@ -305,7 +334,8 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
   <div class="cols">
     <!-- 左：WBS -->
     <section class="col show" id="colLeft">
-      <h2>WBS 分類<span class="chip" id="wbsCount">—</span></h2>
+      <h2><button class="colx" data-col="L" title="收合左欄（Alt+←）">‹</button>WBS 分類<span class="chip" id="wbsCount">—</span></h2>
+      <div class="minilab" data-col="L" title="展開左欄">WBS 分類</div>
       <div style="padding:7px 10px;border-bottom:1px solid var(--line)">
         <input type="text" id="treeSearch" placeholder="搜尋分類／工項／規格…">
       </div>
@@ -461,29 +491,49 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
     </section>
 
     <!-- 右：已選 + 採購包 -->
+    <!-- 右欄改成分頁。原本四區垂直堆疊，等於把四個不同生命週期階段
+         （已選 → 採購包 → 基準版/請購單 → 發包單）塞進 340px 寬的一欄，
+         每區只分到 26vh，真正在用的時候反而看不完。 -->
     <section class="col show" id="colRight">
-      <h2>已選清單<span class="chip" id="cartCount">0</span></h2>
-      <div class="scroll" id="cart"></div>
-      <div class="totbar" id="totals"></div>
-      <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
-        <button class="btn primary" id="btnQuickPr">一鍵轉請購單</button>
-        <button class="btn" id="btnToPkg">轉採購 Package</button>
-        <button class="btn" id="btnBid">投標價組成</button>
-        <button class="btn" id="btnSim">風險模擬</button>
-        <button class="btn" id="btnMarket">行情連動</button>
-        <button class="btn" id="btnAutoPkg">自動建議拆包</button>
-        <button class="btn" id="btnVendors">廠商主檔</button>
-        <button class="btn" id="btnClearCart">清空</button>
+      <h2>
+        <div class="seg" id="rtabs" role="tablist">
+          <button data-rt="cart" aria-pressed="true">已選 <span id="cartCount">0</span></button>
+          <button data-rt="pkg" aria-pressed="false">採購包 <span id="pkgCount">0</span></button>
+          <button data-rt="doc" aria-pressed="false">單據 <span id="docCount">0</span></button>
+        </div>
+        <button class="btn sm" id="btnTools" style="margin-left:auto" title="投標價組成 / 風險模擬 / 行情連動 / 廠商主檔">分析</button>
+        <button class="colx" data-col="R" title="收合右欄（Alt+→）">›</button>
+      </h2>
+      <div class="minilab" data-col="R" title="展開右欄">已選 / 採購包 / 單據</div>
+
+      <div class="rpane on" id="rpCart">
+        <div class="scroll" id="cart"></div>
+        <div class="totbar" id="totals"></div>
+        <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
+          <!-- 這一排只留「對已選清單做的事」。投標價組成、風險模擬、行情連動、
+               廠商主檔是**專案層級**的動作，跟勾了哪幾項無關 ——
+               放在分頁裡等於把它們鎖起來，所以移到標題列那顆「分析」。 -->
+          <button class="btn primary" id="btnQuickPr">一鍵轉請購單</button>
+          <button class="btn" id="btnToPkg">轉採購 Package</button>
+          <button class="btn" id="btnAutoPkg">自動建議拆包</button>
+          <button class="btn" id="btnClearCart">清空</button>
+        </div>
       </div>
-      <h2 style="border-top:1px solid var(--line)">採購包<span class="chip" id="pkgCount">0</span></h2>
-      <div class="scroll" id="pkgs" style="max-height:26vh"></div>
-      <!-- 這兩區沒有內容時整塊隱藏（含標題），不留空盒子佔畫面。
-           產生了 PR／PO 才會出現 —— 它同時是檢視、匯出、轉發包單、改狀態的唯一入口，
-           所以是「空的時候收起來」而不是拿掉。 -->
-      <h2 id="hdBl" style="border-top:1px solid var(--line)" hidden>基準版 / 請購單<span class="chip" id="blCount">0</span></h2>
-      <div class="scroll" id="baselines" style="max-height:26vh" hidden></div>
-      <h2 id="hdPo" style="border-top:1px solid var(--line)" hidden>發包單 (PO)<span class="chip" id="poCount">0</span></h2>
-      <div class="scroll" id="pos" style="max-height:24vh" hidden></div>
+
+      <div class="rpane" id="rpPkg"><div class="scroll" id="pkgs"></div></div>
+
+      <div class="rpane" id="rpDoc">
+        <div class="scroll" id="docScroll">
+          <!-- 沒有內容時整塊隱藏（含標題），不留空盒子。
+               產生了 PR／PO 才會出現 —— 它同時是檢視、匯出、轉發包單、改狀態的唯一入口，
+               所以是「空的時候收起來」而不是拿掉。 -->
+          <h3 class="dsec" id="hdBl" hidden>基準版 / 請購單<span class="chip" id="blCount">0</span></h3>
+          <div id="baselines" hidden></div>
+          <h3 class="dsec" id="hdPo" hidden>發包單 (PO)<span class="chip" id="poCount">0</span></h3>
+          <div id="pos" hidden></div>
+          <div class="hint" id="docEmpty" style="padding:16px 12px;text-align:center">尚無單據。<br>在「已選」頁按<b>一鍵轉請購單</b>即可產生。</div>
+        </div>
+      </div>
     </section>
   </div>
 </div>

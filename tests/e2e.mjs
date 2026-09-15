@@ -30,6 +30,18 @@ let pass = 0, fail = 0;
 const S_diff = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
 const ok = (name, cond, extra = '') => { cond ? (pass++, console.log('  ok  ', name)) : (fail++, console.log('  FAIL', name, extra)); };
 
+/**
+ * 從右欄標題列的「分析」進入專案層級工具。
+ * 投標價組成／風險模擬／行情連動／廠商主檔都走這條路 ——
+ * 它們跟右欄勾了哪幾項無關，所以不放在「已選」分頁裡。
+ */
+async function openTool(pg, id) {
+  await pg.locator('#btnTools').click();
+  await pg.waitForSelector('#dlg[open]');
+  await pg.locator(id).click();
+  await pg.waitForTimeout(220);
+}
+
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1500, height: 940 } });
 const errors = [];
@@ -303,7 +315,7 @@ await page.evaluate(() => {
   window.__takeoff.state.selected = new Set(window.__takeoff.state.items.filter((i) => ['length', 'area'].includes(i.measureType)).map((i) => i.code));
   window.__takeoff.renderAll();
 });
-await page.locator('#btnSim').click();
+await openTool(page, '#tSim');
 await page.waitForSelector('#dlg[open]');
 const simTxt = await page.locator('#dlgBody').innerText();
 ok('列出整包金額分位', simTxt.includes('整包 P80') && simTxt.includes('各項 P80 直接相加'));
@@ -432,7 +444,7 @@ await page.waitForTimeout(200);
 await closeDialog(page, 6);
 
 // 廠商主檔
-await page.locator('#btnVendors').click();
+await openTool(page, '#tVen');
 await page.waitForSelector('#dlg[open]');
 await page.locator('#vLoadDemo').click();
 await page.waitForTimeout(800);
@@ -553,10 +565,18 @@ await closeDialog(page, 6);
 ok('右欄出現發包單', await page.locator('#pos .bl').count() === 1);
 ok('發包單計數正確', (await page.locator('#poCount').innerText()) === '1');
 
+// 右欄分頁：單據頁的計數要含基準版與發包單
+ok('「單據」分頁計數 = 基準版 + 發包單', (await page.locator('#docCount').innerText()) === '2',
+  await page.locator('#docCount').innerText());
+
 // 有內容時這兩區要看得見 —— 「空的時候收起來」很容易退化成「永遠收起來」，
 // 那會讓已產生的 PR／PO 再也點不開（檢視、匯出、轉發包單、改狀態都走這裡）
-ok('有基準版時「基準版 / 請購單」區塊顯示出來', await page.locator('#hdBl').isVisible());
-ok('有發包單時「發包單 (PO)」區塊顯示出來', await page.locator('#hdPo').isVisible());
+await page.locator('#rtabs [data-rt="doc"]').click();
+ok('切到「單據」分頁後，基準版 / 請購單顯示出來', await page.locator('#hdBl').isVisible());
+ok('切到「單據」分頁後，發包單 (PO) 顯示出來', await page.locator('#hdPo').isVisible());
+ok('有單據時不顯示空狀態文字', !(await page.locator('#docEmpty').isVisible()));
+ok('產生單據後不會自動跳頁 —— 使用者要的是「安靜出現就好」',
+  await page.locator('#rpCart').isVisible() === false);
 
 // 還原，不要污染後面的段落
 await page.evaluate(() => {
@@ -571,8 +591,16 @@ ok('沒有基準版時「基準版 / 請購單」整塊隱藏', !(await page.loc
 ok('沒有發包單時「發包單 (PO)」整塊隱藏', !(await page.locator('#hdPo').isVisible()));
 ok('連清單容器也一起收掉，不留空白區塊',
   !(await page.locator('#baselines').isVisible()) && !(await page.locator('#pos').isVisible()));
+ok('改顯示「怎麼產生單據」的空狀態，而不是兩個空盒子',
+  await page.locator('#docEmpty').isVisible());
+ok('「單據」分頁計數歸零', (await page.locator('#docCount').innerText()) === '0');
 // 廠商主檔原本掛在 PO 標題列上 —— 標題一隱藏那顆鍵就永遠按不到了
-ok('「廠商主檔」在區塊隱藏時仍然按得到', await page.locator('#btnVendors').isVisible());
+// 分析工具（投標價組成／風險模擬／行情連動／廠商主檔）是專案層級的，
+// 不論停在哪一個分頁都必須按得到 —— 分頁最容易犯的錯就是把功能鎖進某一頁
+await page.locator('#rtabs [data-rt="doc"]').click();
+ok('停在「單據」分頁時「分析」仍按得到', await page.locator('#btnTools').isVisible());
+await page.locator('#rtabs [data-rt="cart"]').click();
+ok('停在「已選」分頁時「分析」也按得到', await page.locator('#btnTools').isVisible());
 
 console.log('\n【7】採購包與匯出');
 await page.locator('#tabList').click();
@@ -648,6 +676,9 @@ const autoFlag = await page.evaluate(() => window.__takeoff.state.packages.filte
 ok('自動包標記 auto 與分組理由', autoFlag === cards);
 
 console.log('\n【7d】基準版與請購單');
+// 採購包與單據各自在右欄的分頁裡，真實使用者要先切過去才點得到
+await page.locator('#rtabs [data-rt="pkg"]').click();
+ok('切到「採購包」分頁看得到包', await page.locator('.pkg').first().isVisible());
 await page.locator('.pkg [data-pkg-freeze]').first().click();
 await page.waitForSelector('#dlg[open]');
 await page.locator('#dlgFoot button.primary').click();
@@ -662,6 +693,7 @@ await page.fill('#bNote', 'e2e 凍結');
 await page.locator('#dlgFoot button.primary').click();
 await page.waitForTimeout(250);
 if (await page.locator('#dlg[open]').count()) await page.locator('#dlgFoot button').last().click();
+await page.locator('#rtabs [data-rt="doc"]').click();
 const bl1 = await page.evaluate(() => window.__takeoff.state.baselines[0]);
 ok('基準版已建立且 rev=1', bl1 && bl1.rev === 1 && bl1.confirmedBy === '工程部 李經理', JSON.stringify(bl1 && bl1.code));
 ok('基準版卡片顯示未異動', (await page.locator('.bl').first().innerText()).includes('未異動'));
@@ -1122,7 +1154,7 @@ ok('410.01 因差異超標被鎖定、810.01 可用 —— 兩種情形都要被
   susQty[0].qty == null && susQty[2].qty > 0, JSON.stringify(susQty));
 ok('行情已載入（API 失敗時退回種子檔）', await page.evaluate(() => !!window.__takeoff.state.market));
 
-await page.locator('#btnMarket').click();
+await openTool(page, '#tMkt');
 await page.waitForSelector('#dlg[open]');
 await page.waitForTimeout(300);
 let mkTxt = await page.locator('#dlgBody').innerText();
@@ -1163,7 +1195,7 @@ ok('單價漲幅 = 原料佔比 × 指數漲幅，不等於指數漲幅',
 ok('連動後單價高於基準單價', linked.price > linked.base, `${linked.base} → ${linked.price.toFixed(2)}`);
 ok('不鏽鋼不參與連動（行情表無鎳指數）', linked.susLinked === false);
 
-await page.locator('#btnMarket').click();
+await openTool(page, '#tMkt');
 await page.waitForSelector('#dlg[open]');
 await page.waitForTimeout(300);
 mkTxt = await page.locator('#dlgBody').innerText();
@@ -1577,7 +1609,7 @@ ok('開啟時 P80 會變高（發包時報價比估價高）',
   riskGate.onRisk && riskGate.onP80 > riskGate.offP80, `${riskGate.onP80} vs ${riskGate.offP80}`);
 
 // 視窗本身
-await page.locator('#btnBid').click();
+await openTool(page, '#tBid');
 await page.waitForSelector('#dlg[open]');
 await page.waitForTimeout(500);
 const bidTxt = await page.locator('#dlgBody').innerText();
@@ -1865,6 +1897,39 @@ await page.evaluate((keep) => {
   }
   window.__takeoff.renderAll();
 }, sheetBefore);
+
+console.log('\n【7之十三】左右欄收合，把空間讓給中間的 BOM 清單');
+const midW0 = await page.evaluate(() => document.querySelector('#colMid').getBoundingClientRect().width);
+await page.locator('#colLeft .colx').click();
+await page.waitForTimeout(150);
+const midW1 = await page.evaluate(() => document.querySelector('#colMid').getBoundingClientRect().width);
+ok('收合左欄後中欄自動變寬', midW1 > midW0 + 100, `${midW0.toFixed(0)} → ${midW1.toFixed(0)}`);
+ok('左欄縮成一條而不是整個消失（還要能展開回來）',
+  await page.evaluate(() => {
+    const w = document.querySelector('#colLeft').getBoundingClientRect().width;
+    return w > 0 && w < 60;
+  }));
+ok('收合後樹狀清單不再佔位', !(await page.locator('#tree').isVisible()));
+
+await page.locator('#colRight .colx').click();
+await page.waitForTimeout(150);
+const midW2 = await page.evaluate(() => document.querySelector('#colMid').getBoundingClientRect().width);
+ok('兩側都收合時中欄再變寬', midW2 > midW1 + 100, `${midW1.toFixed(0)} → ${midW2.toFixed(0)}`);
+
+// 收合狀態要存下來 —— 每次重整都要重收一次的話沒有人會用
+const savedMini = await page.evaluate(() => {
+  const st = JSON.parse(localStorage.getItem('summit.takeoff.v1') || '{}');
+  return { l: !!(st.settings || {}).colLeftMini, r: !!(st.settings || {}).colRightMini };
+});
+ok('收合狀態有存檔', savedMini.l && savedMini.r, JSON.stringify(savedMini));
+
+// 直排標籤按下去要能展開回來 —— 收合後那是唯一的出口
+await page.locator('#colLeft .minilab').click();
+await page.locator('#colRight .minilab').click();
+await page.waitForTimeout(150);
+const midW3 = await page.evaluate(() => document.querySelector('#colMid').getBoundingClientRect().width);
+ok('點直排標籤可以展開回來', Math.abs(midW3 - midW0) < 2, `${midW0.toFixed(0)} vs ${midW3.toFixed(0)}`);
+ok('展開後樹狀清單回來', await page.locator('#tree').isVisible());
 
 console.log('\n【8】重整後狀態保留');
 const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);

@@ -111,6 +111,8 @@ async function init() {
   buildModel(state.template);
   restore();
   wire();
+  applyColState();
+  switchRightTab('cart');
   state.viewer = new Viewer($('#cv'));
   bindViewer(state.viewer);
   renderAll();
@@ -485,7 +487,7 @@ function renderPkgs() {
 }
 
 function renderAll() {
-  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderPos(); renderDocs(); renderScope(); renderVerifyChip();
+  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderPos(); renderDocTab(); renderDocs(); renderScope(); renderVerifyChip();
   const pc = $('#projContract'); if (pc) pc.value = state.settings.contractType || 'remeasure';
   const pn = $('#projName'); if (pn && pn.value !== state.projName) pn.value = state.projName;
   if (state.analysis) {                       // 資料變了就重算，不讓畫面停在舊結論
@@ -561,14 +563,10 @@ function wire() {
   $('#btnClearCart').onclick = () => { if (confirm('清空已選清單？（採購包不受影響）')) { state.selected.clear(); renderAll(); } };
   $('#btnToPkg').onclick = toPackage;
   $('#btnAutoPkg').onclick = autoPackage;
-  $('#btnSim').onclick = openPortfolioSim;
-  $('#btnBid').onclick = openBid;
   $('#btnQuickPr').onclick = openQuickPr;
-  $('#btnVendors').onclick = openVendors;
   $('#pos').addEventListener('click', (e) => {
     const v = e.target.closest('[data-poview]'); if (v) return openPo(v.dataset.poview);
   });
-  $('#btnMarket').onclick = openMarket;
   $('#calcChip').onclick = openCalcSheet;
   $('#btnDrawReset').onclick = openDrawingReset;
   $('#dupChip').onclick = openDupe;
@@ -691,6 +689,29 @@ function wire() {
     if (state.analysis) renderRfi(state.analysis.metrics.rfis);
   });
 
+  // 左右欄收合。三個人在用的工具，熟手速度優先於新手可發現性 ——
+  // 所以給鍵盤快捷鍵，並且記住狀態。
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-col]');
+    if (t) toggleCol(t.dataset.col);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''))) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); toggleCol('L'); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); toggleCol('R'); }
+  });
+
+  // 專案層級的分析工具。放在右欄標題列，不論停在哪一個分頁都按得到 ——
+  // 這四顆跟「勾了哪幾項」無關，鎖在「已選」分頁裡是錯的分類。
+  $('#btnTools').onclick = openTools;
+
+  // 右欄分頁
+  $('#rtabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rt]'); if (!b) return;
+    switchRightTab(b.dataset.rt);
+  });
+
   // 窄螢幕欄位切換
   $$('.tabbar [data-tab]').forEach((b) => b.onclick = () => {
     $$('.tabbar [data-tab]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
@@ -730,6 +751,71 @@ function wire() {
   });
 
   window.addEventListener('resize', () => state.viewer && state.viewer.resize());
+}
+
+/**
+ * 「單據」分頁的計數與空狀態。
+ *
+ * 基準版與發包單分開 render，但分頁上只有一個數字，所以在這裡合算一次。
+ * 產生請購單之後這一頁**不會自動跳過去** —— 使用者說「安靜出現就好」。
+ */
+function renderDocTab() {
+  const n = state.baselines.length + state.pos.length;
+  $('#docCount').textContent = String(n);
+  $('#docEmpty').hidden = n > 0;
+}
+
+/**
+ * 收合／展開左右欄。
+ *
+ * 中欄是 `minmax(0,1fr)`，兩側一縮它就自動撐開，不需要算寬度。
+ * 但畫布的像素尺寸跟著變了，所以一定要叫 viewer.resize() ——
+ * 少了這一行，圖會維持舊尺寸被拉伸，量測的吸附位置就跟著偏。
+ */
+function toggleCol(which) {
+  const key = which === 'L' ? 'colLeftMini' : 'colRightMini';
+  const next = !state.settings[key];
+  state.settings[key] = next;
+  applyColState();
+  persist();
+}
+
+function applyColState() {
+  const cols = $('.cols');
+  const l = !!state.settings.colLeftMini, r = !!state.settings.colRightMini;
+  cols.classList.toggle('lc', l);
+  cols.classList.toggle('rc', r);
+  $('#colLeft').classList.toggle('mini', l);
+  $('#colRight').classList.toggle('mini', r);
+  $('#colLeft').querySelector('.colx').textContent = l ? '›' : '‹';
+  $('#colRight').querySelector('.colx').textContent = r ? '‹' : '›';
+  // 欄寬變了 → 畫布的像素尺寸變了 → 一定要重算，否則量測會偏
+  if (state.viewer) requestAnimationFrame(() => state.viewer.resize());
+}
+
+/** 專案層級的分析工具選單。 */
+function openTools() {
+  dialog('分析工具', `
+    <p class="hint">這四項算的是<b>整個專案</b>，跟右欄勾了哪幾項無關。</p>
+    <div style="display:grid;gap:8px;margin-top:10px">
+      <button class="btn" id="tBid">投標價組成<div class="hint">直接成本 → 管理費 → 利潤 → 規費 → 風險準備金</div></button>
+      <button class="btn" id="tSim">風險模擬<div class="hint">損耗、價格、工期的機率模擬與準備金建議</div></button>
+      <button class="btn" id="tMkt">行情連動<div class="hint">銅／鋁／鋼指數與價格基準日</div></button>
+      <button class="btn" id="tVen">廠商主檔<div class="hint">資格、評分權重、關係人偵測</div></button>
+    </div>`,
+    [{ label: '關閉' }], (body, gen) => {
+      const go = (id, fn) => { body.querySelector(id).onclick = () => { dlgClose(gen); setTimeout(fn, 60); }; };
+      go('#tBid', openBid); go('#tSim', openPortfolioSim); go('#tMkt', openMarket); go('#tVen', openVendors);
+    });
+}
+
+/** 右欄分頁切換。 */
+function switchRightTab(key) {
+  state.rightTab = key;
+  $$('#rtabs [data-rt]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.rt === key)));
+  $('#rpCart').classList.toggle('on', key === 'cart');
+  $('#rpPkg').classList.toggle('on', key === 'pkg');
+  $('#rpDoc').classList.toggle('on', key === 'doc');
 }
 
 function rangeSelect(a, b, on) {
@@ -4692,4 +4778,5 @@ function exportRfiCsv() {
 // 供 e2e 測試觀察內部狀態
 window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, VF, SH,
   runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet,
-  sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope };
+  sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope,
+  openBid, openPortfolioSim, openMarket, openVendors, openTools, switchRightTab, toggleCol };
