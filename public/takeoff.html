@@ -455,7 +455,8 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
       <div class="scroll" id="cart"></div>
       <div class="totbar" id="totals"></div>
       <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
-        <button class="btn primary" id="btnToPkg">轉採購 Package</button>
+        <button class="btn primary" id="btnQuickPr">一鍵轉請購單</button>
+        <button class="btn" id="btnToPkg">轉採購 Package</button>
         <button class="btn" id="btnBid">投標價組成</button>
         <button class="btn" id="btnSim">風險模擬</button>
         <button class="btn" id="btnMarket">行情連動</button>
@@ -466,6 +467,9 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
       <div class="scroll" id="pkgs" style="max-height:26vh"></div>
       <h2 style="border-top:1px solid var(--line)">基準版 / 請購單<span class="chip" id="blCount">0</span></h2>
       <div class="scroll" id="baselines" style="max-height:26vh"></div>
+      <h2 style="border-top:1px solid var(--line)">發包單 (PO)<span class="chip" id="poCount">0</span>
+        <button class="btn sm" id="btnVendors" style="margin-left:auto">廠商主檔</button></h2>
+      <div class="scroll" id="pos" style="max-height:24vh"></div>
     </section>
   </div>
 </div>
@@ -473,6 +477,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
 <input type="file" id="fileDrawing" accept=".dxf,.dwg,.pdf,application/pdf" hidden>
 <input type="file" id="fileBoq" accept=".csv,text/csv" hidden>
 <input type="file" id="fileProject" accept=".json,application/json" hidden>
+<input type="file" id="fileVendors" accept=".json,application/json" hidden>
 <input type="file" id="fileDoc" multiple hidden>
 
 <dialog id="dlg"><h3 id="dlgTitle">—</h3><div class="dbody" id="dlgBody"></div><footer id="dlgFoot"></footer></dialog>

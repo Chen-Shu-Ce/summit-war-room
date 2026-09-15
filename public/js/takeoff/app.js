@@ -21,6 +21,8 @@ import * as PS from './pdfscale.js';
 import * as LM from './layermatch.js';
 import * as DD from './dedupe.js';
 import * as BD from './bid.js';
+import * as VD from './vendors.js';
+import * as PO from './po.js';
 import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
@@ -66,6 +68,8 @@ const state = {
   survey: null,        // 座標與單位合理性檢查
   pdfScale: null,      // 從 PDF 圖框讀到的比例宣告
   surveyFixed: null,   // 使用者確認過的單位修正
+  vendors: [],         // 廠商主檔。原本 vendor 只是一個自由輸入字串，打錯字就變成另一家
+  pos: [],             // 發包單。PR 對 PO 是多對多，不是一對一
   bid: null,           // 加成設定（管理費／利潤／規費／準備金服務水準）
   missed: [],          // 最近一次自動抓量的漏項 —— 要接成金額保留，不可以在總價裡歸零
   dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
@@ -186,6 +190,7 @@ function persist() {
       baselines: state.baselines, prs: state.prs,
       tasks: state.tasks, seqStart: state.seqStart, priceBase: state.priceBase,
       drawingSigs: state.drawingSigs,
+      vendors: state.vendors, pos: state.pos,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
         id: d.id, kind: d.kind, name: d.name, sheetType: d.sheetType, pages: d.pages,
@@ -219,6 +224,8 @@ function restore() {
     state.seqStart = d.seqStart || '';
     state.priceBase = d.priceBase || null;
     state.drawingSigs = d.drawingSigs || {};
+    state.vendors = d.vendors || [];
+    state.pos = d.pos || [];
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
 }
 
@@ -472,7 +479,7 @@ function renderPkgs() {
 }
 
 function renderAll() {
-  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderDocs(); renderScope();
+  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderPos(); renderDocs(); renderScope();
   const pc = $('#projContract'); if (pc) pc.value = state.settings.contractType || 'remeasure';
   const pn = $('#projName'); if (pn && pn.value !== state.projName) pn.value = state.projName;
   if (state.analysis) {                       // 資料變了就重算，不讓畫面停在舊結論
@@ -550,6 +557,11 @@ function wire() {
   $('#btnAutoPkg').onclick = autoPackage;
   $('#btnSim').onclick = openPortfolioSim;
   $('#btnBid').onclick = openBid;
+  $('#btnQuickPr').onclick = openQuickPr;
+  $('#btnVendors').onclick = openVendors;
+  $('#pos').addEventListener('click', (e) => {
+    const v = e.target.closest('[data-poview]'); if (v) return openPo(v.dataset.poview);
+  });
   $('#btnMarket').onclick = openMarket;
   $('#calcChip').onclick = openCalcSheet;
   $('#btnDrawReset').onclick = openDrawingReset;
@@ -580,6 +592,19 @@ function wire() {
   $('#btnImportBoq').onclick = () => $('#fileBoq').click();
   $('#fileBoq').onchange = (e) => { const f = e.target.files[0]; if (f) importBoqCsv(f); e.target.value = ''; };
   $('#fileProject').onchange = (e) => { const f = e.target.files[0]; if (f) importProject(f); e.target.value = ''; };
+  $('#fileVendors').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const d = JSON.parse(await f.text());
+      const raw = Array.isArray(d) ? d : (d.vendors || []);
+      if (!raw.length) throw new Error('檔案裡找不到 vendors 陣列');
+      state.vendors = raw.map(VD.normalize);
+      persist(); renderAll();
+      setTimeout(() => dialog('已匯入廠商主檔', `<p>載入 <b>${state.vendors.length}</b> 家廠商。</p>
+        <p class="hint">缺的欄位就是缺 —— 工具不會用平均值補。資料完整度會顯示在建議廠商的表格裡。</p>`), 60);
+    } catch (err) { dialog('匯入失敗', `<p>${esc(err.message)}</p>`); }
+  };
   $('#btnSettings').onclick = openSettings;
   $('#btnExport').onclick = openExport;
   $('#btnHelp').onclick = openHelp;
@@ -915,6 +940,379 @@ function openTakeoffReport(written, missed) {
       「未對映」多半是註記層、圖框層，通常可以忽略 —— 但請確認清單上不該有的工項沒有因此漏掉。</p>`
       : '<p class="chip ok" style="display:block;padding:9px 11px">沒有漏項，每一個圖層都有處置。</p>'}
     <p class="hint">請切回清單檢查差異欄與可信度。自動抓量的結果標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。</p>`);
+}
+
+/* ══════════ 廠商、請購單、發包單 ══════════ */
+
+/**
+ * 一鍵：BOM 明細 → 採購包 → 基準版 → 請購單。
+ *
+ * 原本要走三個視窗。合成一鍵之後最容易犯的錯是**順手把閘門也拿掉** ——
+ * 可信度不足、RFI 未結案、重複描繪被擋下的項目，本來就不該進採購。
+ * 所以這裡只省掉點擊，不省掉檢查：擋下的照樣擋，而且要在同一個畫面上
+ * 講清楚是哪幾項、為什麼，讓人當場決定要不要先處理。
+ */
+function openQuickPr() {
+  const list = selectedItems();
+  if (!list.length) return dialog('沒有已選工項', '<p>先在清單勾選要請購的工項，再按一鍵轉請購單。</p>');
+
+  const priced2 = pricedAll(list);
+  const gate = state.settings.gateBand;
+  const pass = [], blocked = [];
+  for (const it of priced2) {
+    const pp = Q.suggestPurchase(it, state.settings);
+    const c = Q.confidence(it, { settings: state.settings, basis: pp.basis });
+    const why = [];
+    if (pp.blocked) why.push('數量來源被鎖定');
+    if (!Q.bandAtLeast(c.band, gate)) why.push(`可信度 ${c.band} 低於門檻 ${gate}`);
+    if (!Q.isNum(pp.orderQty)) why.push('算不出下單量');
+    (why.length ? blocked : pass).push({ it, p: pp, c, why });
+  }
+  if (!pass.length) {
+    return dialog('沒有任何工項可請購', `
+      <p>已選的 ${list.length} 項全部沒通過採購閘門。</p>
+      <table class="mat"><thead><tr><th>工項</th><th>原因</th></tr></thead><tbody>
+        ${blocked.map((b) => `<tr><td>${esc(b.it.code)} ${esc(b.it.name)}</td><td class="hint">${esc(b.why.join('；'))}</td></tr>`).join('')}
+      </tbody></table>`);
+  }
+
+  const items = pass.map((x) => x.it);
+  const cost = pass.reduce((a, x) => a + (x.p.cost || 0), 0);
+  const maxLead = Math.max(0, ...items.map((it) => it.leadTimeDays || 0));
+  const cats = VD.categoriesOf(items);
+  const needDate = S.addDays(new Date().toISOString().slice(0, 10), maxLead + 7);
+  const sug = VD.suggest(state.vendors, { code: 'QUICK', categories: cats, amount: cost, needDate });
+
+  dialog('一鍵轉請購單', `
+    <p>已選 <b>${list.length}</b> 項，其中 <b>${pass.length}</b> 項可請購${blocked.length ? `、<b class="bad">${blocked.length} 項被閘門擋下</b>` : ''}。</p>
+    <div class="totrow"><span>直接成本（未稅）</span><b>NT$ ${Q.fmt(cost, 0)}</b></div>
+    <div class="totrow"><span>最長前置期</span><b>${maxLead} 天</b></div>
+    <div class="totrow"><span>建議需求到貨日</span><b>${esc(needDate)}</b></div>
+    ${blocked.length ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+      被擋下的 ${blocked.length} 項<b>不會</b>進入這張請購單：
+      ${esc(blocked.slice(0, 6).map((b) => `${b.it.code}（${b.why[0]}）`).join('、'))}${blocked.length > 6 ? ' …' : ''}。</p>` : ''}
+
+    <h4 style="margin:14px 0 6px">建議廠商</h4>
+    ${vendorSuggestHtml(sug)}
+
+    <div class="fgrid" style="margin-top:10px">
+      <div><label class="f">請購人（必填）</label><input type="text" id="qReq" placeholder="姓名"></div>
+      <div><label class="f">工程確認人（必填）</label><input type="text" id="qConf" placeholder="凍結基準版需要"></div>
+      <div><label class="f">部門</label><input type="text" id="qDept" value="${esc(state.settings.dept || '')}"></div>
+      <div><label class="f">需求到貨日</label><input type="date" id="qNeed" value="${esc(needDate)}"></div>
+      <div><label class="f">建議廠商</label><input type="text" id="qVend" value="${esc(sug.best ? (sug.ranked.find((x) => x.code === sug.best) || {}).name || '' : '')}"></div>
+      <div><label class="f">稅率</label><input type="number" id="qTax" step="0.01" value="${state.settings.taxRate}"></div>
+    </div>
+    <p class="hint" style="margin-top:8px"><b>一鍵是省掉點擊，不是省掉檢查。</b>
+    可信度不足、數量來源被鎖定、算不出下單量的工項，照樣不會進這張單 ——
+    這一段的檢查跟手動走三個視窗完全一樣。</p>
+    <p class="hint">這一鍵會依序建立<b>採購包 → 基準版 → 請購單</b>三筆紀錄，
+    而不是直接生一張單 —— 基準版是「這批量在這個時間點被誰確認過」的證據，
+    少了它，日後數量有爭議時沒有東西可以對。</p>`,
+    [{ label: '取消' }, {
+      label: '建立', primary: true, fn: () => {
+        const req = $('#qReq').value.trim(), conf = $('#qConf').value.trim();
+        if (!req || !conf) return setTimeout(() => dialog('缺必填欄位', '<p>請購人與工程確認人都必須填 —— 沒有人負責的單不能發。</p>'), 60);
+        const vend = $('#qVend').value.trim(), need = $('#qNeed').value, tax = parseFloat($('#qTax').value);
+        const pkg = {
+          code: `PKG-${String(state.packages.length + 1).padStart(3, '0')}`,
+          name: `一鍵請購 ${new Date().toISOString().slice(0, 10)}`,
+          vendor: vend, needDate: need, itemCodes: items.map((it) => it.code),
+        };
+        state.packages.push(pkg);
+        const fz = B.freezeBaseline(pkg, items, state.settings, { confirmedBy: conf, by: conf, note: '一鍵轉請購單' });
+        if (fz.error) return setTimeout(() => dialog('凍結基準版失敗', `<p>${esc(fz.error)}</p>`), 60);
+        state.baselines.push(fz.baseline);
+        const pr = B.createPr(fz.baseline, {
+          requester: req, dept: $('#qDept').value.trim(), project: state.projName,
+          vendor: vend, needDate: need, taxRate: Number.isFinite(tax) ? tax : state.settings.taxRate,
+          template: state.settings.prTemplate,
+        }, state.prs.map((x) => x.no));
+        if (pr.error) return setTimeout(() => dialog('產生請購單失敗', `<p>${esc(pr.error)}</p>`), 60);
+        state.prs.push(pr.pr);
+        renderAll(); persist();
+        setTimeout(() => openExportPr(pr.pr.no), 80);
+      },
+    }]);
+}
+
+/** 建議廠商的區塊 —— 分不出來就說分不出來，被否決的也要列出理由。 */
+function vendorSuggestHtml(sug) {
+  if (!state.vendors.length) {
+    return `<p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+      廠商主檔是空的，無法建議。按右欄的「廠商主檔」匯入貴公司的廠商資料
+      —— 沒有交期達成率、不良率、報價指數這些歷史數字，任何「建議廠商」都是憑空排名。</p>`;
+  }
+  const rows = sug.ranked.slice(0, 5).map((x, i) => `<tr class="${i === 0 && sug.best ? 'on' : ''}">
+    <td>${esc(x.name)}</td><td class="n">${x.score}</td>
+    <td class="n">${(x.coverage * 100).toFixed(0)}%</td>
+    <td class="hint">${esc(x.reasons.slice(0, 3).join('；'))}</td></tr>`).join('');
+  const rel = VD.relatedParties(state.vendors);
+  return `
+    <table class="mkt"><thead><tr><th>廠商</th><th class="n">分數</th><th class="n">資料完整度</th><th>依據</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="hint" style="margin-top:6px">${esc(sug.why)}</p>
+    ${sug.ambiguous.length ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
+      前幾名分數相近，<b>工具不指定第一名</b>。廠商評分的輸入是歷史統計，本來就有雜訊 ——
+      差幾分就說某一家比較好是拿雜訊當訊號。請人工比較。</p>` : ''}
+    ${sug.blocked.length ? `<p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+      ${sug.blocked.length} 家因資格不符被排除（不是扣分，是不能用）：
+      ${sug.blocked.map((b) => `${esc(b.name)}（${esc(b.blockers[0])}）`).join('、')}</p>` : ''}
+    ${rel.length ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
+      <b>關係人疑慮：</b>${rel.map((x) => `${x.vendors.map((v) => esc(v.name)).join(' / ')} 共用同一組${esc(x.label)}`).join('；')}。
+      這是事實比對不是指控 —— 但若這幾家一起比過價，比價結果需要重新檢視。</p>` : ''}`;
+}
+
+/* ── 廠商主檔 ── */
+
+function openVendors() {
+  const vs = state.vendors.map(VD.normalize);
+  const rel = VD.relatedParties(state.vendors);
+  const conc = VD.concentration(state.pos.filter((x) => x.status !== 'cancelled')
+    .map((x) => ({ vendor: x.vendor, amount: x.subtotal })));
+  const rows = vs.map((v) => {
+    const bad = VD.eligibility(v);
+    return `<tr class="${bad.length ? 'overdue' : ''}">
+      <td>${esc(v.name)}${v.demo ? ' <span class="chip warn">示範</span>' : ''}<div class="hint">${esc(v.code)}${v.taxId ? ' · ' + esc(v.taxId) : ''}</div></td>
+      <td class="hint">${esc(v.categories.join('、') || '—')}</td>
+      <td class="n">${v.onTimeRate == null ? '—' : (v.onTimeRate * 100).toFixed(0) + '%'}</td>
+      <td class="n">${v.defectRate == null ? '—' : (v.defectRate * 100).toFixed(1) + '%'}</td>
+      <td class="n">${v.priceIndex == null ? '—' : v.priceIndex.toFixed(2)}</td>
+      <td class="n">${v.leadDays == null ? '—' : v.leadDays + ' 天'}</td>
+      <td>${bad.length ? `<span class="chip bad">${esc(bad[0])}</span>` : `<span class="chip ok">${esc(VD.STATUS[v.status].label)}</span>`}</td>
+    </tr>`;
+  }).join('');
+
+  dialog('廠商主檔', `
+    ${vs.length ? '' : `<p class="chip warn" style="display:block;padding:9px 11px;white-space:normal">
+      主檔是空的。<b>沒有歷史數字的「建議廠商」只是憑空排名</b> ——
+      交期達成率、不良率、報價指數這三欄才是分數的來源。</p>`}
+    ${vs.some((v) => v.demo) ? `<p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+      目前載入的是<b>示範資料，全部虛構</b>，統編與聯絡方式都是填充值。
+      請匯入貴公司的真實廠商資料後再據以發包。</p>` : ''}
+    ${vs.length ? `<div style="max-height:40vh;overflow:auto">
+      <table class="mkt"><thead><tr><th>廠商</th><th>承作品類</th><th class="n">交期達成</th>
+        <th class="n">不良率</th><th class="n">報價指數</th><th class="n">前置期</th><th>狀態</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : ''}
+
+    ${rel.length ? `<h4 style="margin:14px 0 6px">關係人疑慮</h4>
+      <table class="mat"><thead><tr><th>共用項目</th><th>廠商</th></tr></thead><tbody>
+        ${rel.map((x) => `<tr class="overdue"><td>${esc(x.label)}</td>
+          <td>${x.vendors.map((v) => esc(v.name)).join(' / ')}</td></tr>`).join('')}</tbody></table>
+      <p class="hint" style="margin-top:6px"><b>這是事實比對，不是指控。</b>
+        共用地址可能是同一棟商辦、共用電話可能是總機。工具只負責把它攤開 ——
+        但如果三家報價裡有兩家其實是同一個人，比價本身就沒有意義了。</p>` : ''}
+
+    ${conc.rows.length ? `<h4 style="margin:14px 0 6px">發包集中度</h4>
+      <table class="mat"><thead><tr><th>廠商</th><th class="n">金額</th><th class="n">佔比</th></tr></thead><tbody>
+        ${conc.rows.map((x) => `<tr class="${x.share > conc.warn ? 'overdue' : ''}"><td>${esc(x.vendor)}</td>
+          <td class="n">NT$ ${Q.fmt(x.amount, 0)}</td><td class="n">${(x.share * 100).toFixed(1)}%</td></tr>`).join('')}</tbody></table>
+      <p class="hint" style="margin-top:6px">HHI ${conc.hhi}（1 = 全部給同一家）。${esc(conc.note)}</p>` : ''}
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn" id="vLoadDemo">載入示範資料</button>
+      <button class="btn" id="vImport">匯入 JSON</button>
+      <button class="btn" id="vExport">匯出 JSON</button>
+      <button class="btn" id="vClear">清空主檔</button>
+    </div>
+    <p class="hint" style="margin-top:8px">匯入格式見 <code>public/data/vendors-demo.json</code> 的 <code>_fields</code> 說明。
+      缺的欄位就是缺 —— 工具<b>不會</b>用平均值補，因為「沒有交期紀錄」本身就是一種資訊，
+      不該讓沒紀錄的廠商白拿一個平均分。</p>`,
+    [{ label: '關閉' }], (body, gen) => {
+      const re = () => { dlgClose(gen); setTimeout(openVendors, 60); };
+      body.querySelector('#vLoadDemo').onclick = async () => {
+        try {
+          const r = await fetch('./data/vendors-demo.json', { cache: 'no-store' });
+          const d = await r.json();
+          state.vendors = (d.vendors || []).map(VD.normalize);
+          persist(); renderAll(); re();
+        } catch (e) { dialog('載入失敗', `<p>${esc(e.message)}</p>`); }
+      };
+      body.querySelector('#vExport').onclick = () =>
+        download(`vendors-${new Date().toISOString().slice(0, 10)}.json`,
+          JSON.stringify({ vendors: state.vendors }, null, 2));
+      body.querySelector('#vImport').onclick = () => { dlgClose(gen); $('#fileVendors').click(); };
+      body.querySelector('#vClear').onclick = () => {
+        if (!confirm('清空廠商主檔？已開立的發包單不受影響。')) return;
+        state.vendors = []; persist(); renderAll(); re();
+      };
+    });
+}
+
+/* ── 發包單 ── */
+
+function renderPos() {
+  const host = $('#pos');
+  $('#poCount').textContent = state.pos.length;
+  if (!state.pos.length) {
+    host.innerHTML = '<div class="hint" style="padding:9px 11px">尚無發包單。請購單產生後，可在請購單視窗按「轉發包單」。</div>';
+    return;
+  }
+  host.innerHTML = state.pos.map((po) => {
+    const st = PO.PO_STATUS[po.status] || PO.PO_STATUS.draft;
+    const v = po.variance;
+    return `<div class="bl"><header>
+        <b>${esc(po.no)}</b><span class="chip ${po.status === 'cancelled' ? 'bad' : po.status === 'draft' ? 'warn' : 'ok'}">${esc(st.label)}</span>
+        <span class="hint">${esc(po.vendor)}</span>
+        <button class="btn sm" data-poview="${esc(po.no)}" style="margin-left:auto">檢視</button>
+      </header>
+      <div class="body">
+        <div class="totrow"><span>${po.lines.length} 項 · 來源 ${esc(po.prNos.join('、'))}</span>
+          <b>NT$ ${Q.fmt(po.total, 0)}</b></div>
+        <div class="hint">議價差額 <b class="${v < 0 ? 'pos' : v > 0 ? 'neg' : ''}">${v === 0 ? '±0' : (v < 0 ? '' : '+') + 'NT$ ' + Q.fmt(v, 0)}</b>
+          ${po.variancePct == null ? '' : `（${(po.variancePct * 100).toFixed(1)}%）`}
+          ${po.deliveryDate ? ` · 交貨 ${esc(po.deliveryDate)}` : ''}</div>
+      </div></div>`;
+  }).join('');
+}
+
+/**
+ * 請購單 → 發包單。
+ *
+ * 只列**還沒開滿**的明細 —— 已開滿的列出來只會讓人不小心再開一次。
+ * 議定單價與估價分開存：覆蓋估價等於把「我估得準不準」這個資訊永久刪掉。
+ */
+function openCreatePo(prNo) {
+  const pr = state.prs.find((x) => x.no === prNo);
+  if (!pr) return;
+  const open = PO.openLines(pr, state.pos);
+  if (!open.length) {
+    const f = PO.prFulfilment(pr, state.pos);
+    return dialog('已全部開單', `<p>${esc(pr.no)} 的明細已經全部開出發包單（${esc(f.poNos.join('、'))}）。</p>`);
+  }
+  const cats = VD.categoriesOf(open.map((l) => state.itemByCode.get(l.code)).filter(Boolean));
+  const amount = open.reduce((a, l) => a + (Q.isNum(l.unitPrice) ? l.remaining * l.unitPrice : 0), 0);
+  const sug = VD.suggest(state.vendors, { code: pr.packageCode, categories: cats, amount, needDate: pr.needDate });
+  const vendorOpts = state.vendors.map(VD.normalize)
+    .map((v) => `<option value="${esc(v.code)}" ${sug.best === v.code ? 'selected' : ''}>${esc(v.name)}${VD.eligibility(v).length ? '（不符資格）' : ''}</option>`).join('');
+
+  dialog(`轉發包單 — ${esc(pr.no)}`, `
+    <p>可開立 <b>${open.length}</b> 項，估價金額 NT$ ${Q.fmt(amount, 0)}（未稅）。</p>
+    <h4 style="margin:12px 0 6px">建議廠商</h4>
+    ${vendorSuggestHtml(sug)}
+    <div class="fgrid" style="margin-top:10px">
+      <div><label class="f">廠商（必填）</label><select id="oVend"><option value="">— 請選擇 —</option>${vendorOpts}</select></div>
+      <div><label class="f">發包人（必填）</label><input type="text" id="oBy" placeholder="姓名"></div>
+      <div><label class="f">交貨日期</label><input type="date" id="oDate" value="${esc(pr.needDate || '')}"></div>
+      <div><label class="f">交貨地點</label><input type="text" id="oTo" placeholder="工地／倉庫"></div>
+      <div><label class="f">付款條件</label><input type="text" id="oPay" placeholder="留空則帶廠商主檔帳期"></div>
+      <div><label class="f">逾期條款</label><input type="text" id="oPen" value="每日千分之一（合約第 ○ 條）"></div>
+    </div>
+    <h4 style="margin:14px 0 6px">明細（可改數量與議定單價）</h4>
+    <div style="max-height:32vh;overflow:auto">
+      <table class="mkt"><thead><tr><th>工項</th><th class="n">可開量</th><th class="n">本次數量</th>
+        <th class="n">估價單價</th><th class="n">議定單價</th></tr></thead>
+        <tbody>${open.map((l, i) => `<tr>
+          <td>${esc(l.name)}<div class="hint">${esc(l.code)}${l.already ? ` · 已開 ${Q.fmt(l.already, 2)}` : ''}</div></td>
+          <td class="n">${Q.fmt(l.remaining, 2)} ${esc(l.unit)}</td>
+          <td class="n"><input type="number" class="num" data-oq="${i}" step="0.01" value="${l.remaining}" style="width:100px"></td>
+          <td class="n hint">${Q.isNum(l.unitPrice) ? Q.fmt(l.unitPrice, 2) : '—'}</td>
+          <td class="n"><input type="number" class="num" data-op="${i}" step="0.01" value="${Q.isNum(l.unitPrice) ? l.unitPrice : ''}" style="width:100px"></td>
+        </tr>`).join('')}</tbody></table>
+    </div>
+    <p class="hint" style="margin-top:8px">議定單價會與估價單價<b>分開存</b>，兩者都留著才算得出議價差額 ——
+      那是回饋「我估得準不準」的唯一數字。直接覆蓋估價，等於把它永久刪掉。</p>`,
+    [{ label: '取消' }, {
+      label: '建立發包單', primary: true, fn: () => {
+        const vcode = $('#oVend').value;
+        const vendor = state.vendors.map(VD.normalize).find((v) => v.code === vcode);
+        if (!vendor) return setTimeout(() => dialog('缺廠商', '<p>發包單是對外契約，必須指定廠商。</p>'), 60);
+        const lines = open.map((l, i) => ({
+          code: l.code,
+          qty: parseFloat($(`[data-oq="${i}"]`).value),
+          unitPrice: parseFloat($(`[data-op="${i}"]`).value),
+        })).filter((x) => Number.isFinite(x.qty) && x.qty > 0);
+        const r = PO.createPo(pr, vendor, {
+          by: $('#oBy').value.trim(), dept: state.settings.dept,
+          deliveryDate: $('#oDate').value, deliveryTo: $('#oTo').value.trim(),
+          paymentTerms: $('#oPay').value.trim(), penaltyClause: $('#oPen').value.trim(),
+          lines, taxRate: pr.taxRate,
+        }, state.pos);
+        if (r.error) {
+          return setTimeout(() => dialog('無法建立發包單', `<p>${esc(r.error)}</p>
+            ${(r.rejected || []).length ? `<table class="mat"><thead><tr><th>工項</th><th>原因</th></tr></thead><tbody>
+              ${r.rejected.map((x) => `<tr><td>${esc(x.code)}</td><td class="hint">${esc(x.why)}</td></tr>`).join('')}</tbody></table>` : ''}`), 60);
+        }
+        state.pos.push(r.po);
+        renderAll(); persist();
+        setTimeout(() => openPo(r.po.no), 80);
+      },
+    }]);
+}
+
+/** 檢視發包單，並在這裡做狀態變更與匯出。 */
+function openPo(no) {
+  const po = state.pos.find((x) => x.no === no);
+  if (!po) return;
+  const rel = VD.relatedParties(state.vendors).filter((x) => x.vendors.some((v) => v.code === po.vendorCode));
+  const conc = VD.concentration(state.pos.filter((x) => x.status !== 'cancelled')
+    .map((x) => ({ vendor: x.vendor, amount: x.subtotal })));
+  const share = (conc.rows.find((x) => x.vendor === po.vendor) || {}).share;
+  const issues = PO.poReadiness(po, { relatedParties: rel, share });
+  const st = PO.PO_STATUS[po.status];
+
+  dialog(`發包單 ${esc(po.no)}`, `
+    <div class="hint">${esc(po.vendor)} · 來源 ${esc(po.prNos.join('、'))} · 發包人 ${esc(po.by)}
+      ${po.deliveryDate ? ` · 交貨 ${esc(po.deliveryDate)}` : ''}</div>
+    <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+      <span class="chip ${po.status === 'cancelled' ? 'bad' : po.status === 'draft' ? 'warn' : 'ok'}">${esc(st.label)}</span>
+      ${po.paymentTerms ? `<span class="chip">${esc(po.paymentTerms)}</span>` : ''}
+      ${po.penaltyClause ? `<span class="chip">${esc(po.penaltyClause)}</span>` : ''}
+    </div>
+    ${issues.length ? `<div style="margin:8px 0">${issues.map((x) => `<p class="chip ${x.level === 'bad' ? 'bad' : x.level === 'warn' ? 'warn' : ''}"
+      style="display:block;padding:7px 10px;white-space:normal;margin:4px 0">${esc(x.msg)}</p>`).join('')}</div>` : ''}
+    <table class="mkt"><thead><tr><th>工項</th><th class="n">數量</th><th class="n">估價單價</th>
+      <th class="n">議定單價</th><th class="n">金額</th></tr></thead>
+      <tbody>${po.lines.map((l) => `<tr><td>${esc(l.name)}<div class="hint">${esc(l.code)}</div></td>
+        <td class="n">${Q.fmt(l.qty, 2)} ${esc(l.unit)}</td>
+        <td class="n hint">${Q.isNum(l.estUnitPrice) ? Q.fmt(l.estUnitPrice, 2) : '—'}</td>
+        <td class="n">${Q.isNum(l.unitPrice) ? Q.fmt(l.unitPrice, 2) : '<span class="chip bad">未議價</span>'}</td>
+        <td class="n">${l.amount == null ? '—' : Q.fmt(l.amount, 0)}</td></tr>`).join('')}</tbody></table>
+    <div class="totrow" style="margin-top:8px"><span>未稅</span><b>NT$ ${Q.fmt(po.subtotal, 0)}</b></div>
+    <div class="totrow"><span>稅額（${(po.taxRate * 100).toFixed(0)}%）</span><b>NT$ ${Q.fmt(po.tax, 0)}</b></div>
+    <div class="totrow"><span>含稅合計</span><b>NT$ ${Q.fmt(po.total, 0)}</b></div>
+    <div class="totrow"><span>估價金額</span><b class="hint">NT$ ${Q.fmt(po.estSubtotal, 0)}</b></div>
+    <div class="totrow"><span>議價差額</span><b class="${po.variance < 0 ? 'pos' : po.variance > 0 ? 'neg' : ''}">
+      ${po.variance === 0 ? '±0' : (po.variance < 0 ? '' : '+') + 'NT$ ' + Q.fmt(po.variance, 0)}
+      ${po.variancePct == null ? '' : `（${(po.variancePct * 100).toFixed(1)}%）`}</b></div>
+    ${po.history && po.history.length ? `<h4 style="margin:14px 0 6px">狀態歷程</h4>
+      <ul class="hist">${po.history.map((h) => `<li>${esc(String(h.at).slice(0, 16).replace('T', ' '))}
+        ${esc(PO.PO_STATUS[h.from] ? PO.PO_STATUS[h.from].label : h.from)} → ${esc(PO.PO_STATUS[h.to] ? PO.PO_STATUS[h.to].label : h.to)}
+        ${h.by ? ' · ' + esc(h.by) : ''}</li>`).join('')}</ul>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      ${['issued', 'acked', 'closed'].filter((k) => k !== po.status).map((k) =>
+        `<button class="btn sm" data-post="${k}">標記為${esc(PO.PO_STATUS[k].label)}</button>`).join('')}
+      ${po.status === 'cancelled' ? '' : '<button class="btn sm" data-post="cancelled">取消</button>'}
+    </div>
+    <p class="hint" style="margin-top:8px">狀態只能往前走，不能倒退 ——
+      已發出的契約文件不能偷偷改內容，要改請取消後重開。</p>`,
+    [{ label: '關閉' }, { label: '匯出 Excel', fn: () => exportPo(po) }],
+    (body, gen) => {
+      body.querySelectorAll('[data-post]').forEach((b) => {
+        b.onclick = () => {
+          const r = PO.setStatus(po, b.dataset.post, prompt('操作人姓名？', '') || '');
+          if (r.error) return setTimeout(() => dialog('狀態不可變更', `<p>${esc(r.error)}</p>`), 60);
+          state.pos = state.pos.map((x) => (x.no === po.no ? r.po : x));
+          renderAll(); persist();
+          dlgClose(gen); setTimeout(() => openPo(po.no), 60);
+        };
+      });
+    });
+}
+
+function exportPo(po) {
+  const head = [['發包單號', po.no], ['狀態', (PO.PO_STATUS[po.status] || {}).label || po.status],
+    ['廠商', po.vendor], ['統一編號', po.vendorTaxId], ['來源請購單', po.prNos.join('、')],
+    ['採購包', `${po.packageCode} ${po.packageName}`], ['發包人', po.by], ['部門', po.dept],
+    ['交貨日期', po.deliveryDate], ['交貨地點', po.deliveryTo],
+    ['付款條件', po.paymentTerms], ['逾期條款', po.penaltyClause], [],
+    ['未稅金額', po.subtotal], ['稅率', po.taxRate], ['稅額', po.tax], ['含稅合計', po.total],
+    ['估價金額', po.estSubtotal], ['議價差額', po.variance],
+    ['議價差額比例', po.variancePct == null ? '' : po.variancePct]];
+  const lines = [['工項代碼', 'ERP 料號', '名稱', '規格', '單位', '數量', '估價單價', '議定單價', '金額', '來源 PR'],
+    ...po.lines.map((l) => [l.code, l.erpCode, l.name, l.spec, l.unit, l.qty,
+      l.estUnitPrice ?? '', l.unitPrice ?? '', l.amount ?? '', l.prNo])];
+  exportExcel(`發包單-${po.no}`, [{ name: '表頭', rows: head }, { name: '明細', rows: lines }]);
 }
 
 /* ══════════ 投標價組成 ══════════ */
@@ -2823,7 +3221,9 @@ function openExportPr(no) {
     </div>
     <p class="hint" style="margin-top:10px">本工具不綁任何一套 ERP：中性資料模型 + 可設定的欄位對映。
     把對方的欄位名稱填進對映表，匯出的 Excel 表頭就會用那個名字，可直接餵進去。</p>`,
-    [{ label: '關閉' }, { label: '下載 Excel', primary: true, fn: () => downloadPr(pr.no, $('#eProf') ? $('#eProf').value : prof) }],
+    [{ label: '關閉' },
+      { label: '轉發包單 (PO)', fn: () => setTimeout(() => openCreatePo(pr.no), 60) },
+      { label: '下載 Excel', primary: true, fn: () => downloadPr(pr.no, $('#eProf') ? $('#eProf').value : prof) }],
     (body) => {
       body.querySelector('#eProf').onchange = (e) => { state.settings.erpProfile = e.target.value; persist(); };
       body.querySelector('#eMap').onclick = () => { $('#dlg').close(); setTimeout(() => openErpMapping(pr.no), 60); };
@@ -3399,6 +3799,8 @@ function exportProject() {
     settings: state.settings,
     items: state.items,
     packages: state.packages,
+    vendors: state.vendors,
+    pos: state.pos,
     rfiLog: state.rfiLog,
     baselines: state.baselines,
     prs: state.prs,
@@ -3957,4 +4359,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

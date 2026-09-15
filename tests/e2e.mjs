@@ -424,6 +424,142 @@ const blockedAfter = await page.evaluate(() => {
 });
 ok('全部處理後閘門放行', blockedAfter === 0, '仍被擋 ' + blockedAfter);
 
+console.log('\n【7之九】BOM → 請購單 → 發包單');
+// 使用者要的：BOM 明細一鍵轉 PR、算出成本與建議廠商，再轉 PO。
+// 一鍵是省掉點擊，不是省掉檢查 —— 採購閘門照擋。
+await page.locator('#tabList').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+
+// 廠商主檔
+await page.locator('#btnVendors').click();
+await page.waitForSelector('#dlg[open]');
+await page.locator('#vLoadDemo').click();
+await page.waitForTimeout(800);
+const vTxt = await page.locator('#dlgBody').innerText();
+ok('載入廠商主檔', await page.evaluate(() => window.__takeoff.state.vendors.length) === 5);
+ok('示範資料要明確標示為虛構', vTxt.includes('全部虛構'), vTxt.slice(0, 80));
+ok('資格過期的廠商在主檔就標成不可用', vTxt.includes('2020-12-31'), vTxt.slice(0, 400));
+ok('關係人疑慮：共用電話／地址／負責人／匯款帳戶都抓得到',
+  ['聯絡電話', '地址', '負責人', '匯款帳戶'].every((k) => vTxt.includes(k)), vTxt.slice(0, 600));
+ok('明說這是事實比對不是指控', vTxt.includes('不是指控'));
+await closeDialog(page, 6);
+
+// 一鍵轉 PR
+await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  s.selected = new Set(['321.01', '322.01', '320.01', '310.01']);
+  window.__takeoff.renderAll();
+});
+await page.locator('#btnQuickPr').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(400);
+const qTxt = await page.locator('#dlgBody').innerText();
+ok('算出直接成本', /直接成本（未稅）/.test(qTxt) && /NT\$ [\d,]+/.test(qTxt), qTxt.slice(0, 160));
+ok('算出最長前置期與建議到貨日', qTxt.includes('最長前置期') && qTxt.includes('建議需求到貨日'));
+ok('建議廠商附分數、資料完整度與依據',
+  qTxt.includes('分數') && qTxt.includes('資料完整度') && qTxt.includes('交期達成率'), qTxt.slice(0, 500));
+ok('不符資格的廠商被排除，且說明是「不能用」不是扣分',
+  qTxt.includes('資格不符被排除') && qTxt.includes('不是扣分'), qTxt.slice(0, 900));
+ok('明說一鍵不省檢查', qTxt.includes('省掉點擊'), qTxt.slice(-400));
+
+const quickSug = await page.evaluate(() => {
+  const { VD, state } = window.__takeoff;
+  return VD.suggest(state.vendors, { categories: ['321', '322', '320', '310'], amount: 4000000, needDate: '2027-06-01' });
+});
+ok('品類全涵蓋的廠商排第一', quickSug.best === 'DEMO-A', JSON.stringify(quickSug.ranked.map((x) => [x.code, x.score])));
+ok('品類完全不符者被否決而非低分', quickSug.blocked.some((b) => b.code === 'DEMO-E'), JSON.stringify(quickSug.blocked.map((x) => x.code)));
+
+await page.fill('#qReq', '採購 王小明');
+await page.fill('#qConf', '電氣技師 李四');
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(900);
+const made = await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  return { prs: s.prs.length, bls: s.baselines.length, pkgs: s.packages.length, prNo: s.prs[s.prs.length - 1].no };
+});
+ok('一鍵同時建立採購包、基準版、請購單三筆紀錄',
+  made.prs === 1 && made.bls >= 1 && made.pkgs >= 1, JSON.stringify(made));
+ok('產生後直接開啟請購單', (await page.locator('#dlgTitle').innerText()).includes(made.prNo));
+
+// 轉 PO
+await page.locator('#dlgFoot button').filter({ hasText: '轉發包單' }).click();
+await page.waitForTimeout(700);
+ok('開啟轉發包單視窗', (await page.locator('#dlgTitle').innerText()).includes('轉發包單'));
+const oTxt = await page.locator('#dlgBody').innerText();
+ok('列出可開量與估價單價', oTxt.includes('可開量') && oTxt.includes('估價單價'), oTxt.slice(-500));
+ok('明說議定價與估價分開存', oTxt.includes('分開存'), oTxt.slice(-300));
+
+await page.selectOption('#oVend', 'DEMO-A');
+await page.fill('#oBy', '採購 王小明');
+// 第一項殺價 5%
+const negotiated = await page.evaluate(() => {
+  const el = document.querySelector('[data-op="0"]');
+  const est = parseFloat(el.value);
+  el.value = (est * 0.95).toFixed(2);
+  return { est, neg: parseFloat(el.value), qty: parseFloat(document.querySelector('[data-oq="0"]').value) };
+});
+await page.locator('#dlgFoot button.primary').click();
+await page.waitForTimeout(900);
+ok('發包單建立並開啟', (await page.locator('#dlgTitle').innerText()).includes('發包單 PO-'),
+  await page.locator('#dlgTitle').innerText());
+const po = await page.evaluate(() => window.__takeoff.state.pos[0]);
+ok('估價單價沒有被議定價覆蓋', po.lines[0].estUnitPrice === negotiated.est,
+  `${po.lines[0].estUnitPrice} vs ${negotiated.est}`);
+ok('議定單價存在自己的欄位', Math.abs(po.lines[0].unitPrice - negotiated.neg) < 0.01);
+ok('議價差額算得對（手算）',
+  Math.abs(po.variance - (negotiated.neg - negotiated.est) * negotiated.qty) < 1,
+  `${po.variance} vs ${(negotiated.neg - negotiated.est) * negotiated.qty}`);
+ok('談下來的差額是負數', po.variance < 0, String(po.variance));
+ok('每一列都記得來源 PR', po.lines.every((l) => l.prNo === made.prNo));
+ok('付款條件由廠商主檔帶出', po.paymentTerms.includes('60'), po.paymentTerms);
+const poTxt = await page.locator('#dlgBody').innerText();
+ok('集中度警示：這家佔 100%', poTxt.includes('100%') && poTxt.includes('單一廠商出事'), poTxt.slice(0, 400));
+
+// 超發必須被擋
+const over = await page.evaluate(() => {
+  const { PO, state } = window.__takeoff;
+  const pr = state.prs[0];
+  const first = state.pos[0];
+  const code = first.lines[0].code;
+  const prQty = pr.lines.find((l) => (l.itemCode || l.code) === code).qty;
+  const r = PO.createPo(pr, { code: 'DEMO-B', name: '示範Ｂ電機（虛構）' },
+    { by: 'A', lines: [{ code, qty: prQty }] }, state.pos);
+  return { error: r.error || '', why: (r.rejected || [])[0] ? r.rejected[0].why : '' };
+});
+ok('同一工項再開一次會被擋（超發）', !!over.error, JSON.stringify(over));
+ok('並說出請購多少、已開多少、超出多少', /超發/.test(over.why) && /已開/.test(over.why), over.why);
+
+// 狀態機
+const st = await page.evaluate(() => {
+  const { PO, state } = window.__takeoff;
+  const issued = PO.setStatus(state.pos[0], 'issued', '王').po;
+  return { ok: issued.status, back: PO.setStatus(issued, 'draft').error || '' };
+});
+ok('狀態可以往前走', st.ok === 'issued');
+ok('但不能倒退 —— 已發出的契約文件不能偷偷改', /不可從/.test(st.back), st.back);
+
+// 匯出
+const poDl = page.waitForEvent('download');
+await page.locator('#dlgFoot button').filter({ hasText: '匯出' }).click();
+const poXl = readXlsx(await readFile(await (await poDl).path()));
+ok('發包單可匯出 Excel（表頭 + 明細兩張工作表）', poXl.sheets.length === 2,
+  poXl.sheets.map((s) => s.name).join('|'));
+ok('匯出同時含估價單價與議定單價', poXl.text.includes('估價單價') && poXl.text.includes('議定單價'));
+ok('匯出含議價差額', poXl.text.includes('議價差額'));
+await closeDialog(page, 6);
+
+// 右欄列表
+ok('右欄出現發包單', await page.locator('#pos .bl').count() === 1);
+ok('發包單計數正確', (await page.locator('#poCount').innerText()) === '1');
+
+// 還原，不要污染後面的段落
+await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  s.pos = []; s.prs = []; s.baselines = []; s.packages = []; s.vendors = []; s.selected = new Set();
+  window.__takeoff.renderAll();
+});
+
 console.log('\n【7】採購包與匯出');
 await page.locator('#tabList').click();
 await page.evaluate(() => {
