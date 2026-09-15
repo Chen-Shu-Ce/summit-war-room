@@ -280,6 +280,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
     <button class="btn" id="btnImportDrawing">載入圖面 (DWG/DXF/PDF)</button>
     <button class="btn" id="btnDrawReset">清除／更新圖面</button>
     <button class="btn" id="btnImportBoq">匯入 BOQ CSV</button>
+    <button class="btn" id="btnVerify">驗算</button>
     <button class="btn" id="btnSettings">參數</button>
     <button class="btn" id="btnExport">匯出</button>
     <button class="btn" id="btnHelp">說明</button>
@@ -436,6 +437,7 @@ table.fac td:last-child{text-align:right;font-family:var(--mono)}
           <span class="chip" id="pageChip" hidden></span>
           <button class="chip" id="calcChip" hidden title="查看圖面計算式的驗算結果" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
           <button class="chip" id="dupChip" hidden title="重複描繪偵測：重複的線會讓長度直接翻倍" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <button class="chip" id="vfChip" hidden title="驗算報告：程式讀出來的尺寸與數量，哪些驗過、哪些沒得驗" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
           <span class="chip" id="scaleChip">比例：未設定</span>
         </div>
         <canvas id="cv"></canvas>

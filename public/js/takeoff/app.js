@@ -23,6 +23,7 @@ import * as DD from './dedupe.js';
 import * as BD from './bid.js';
 import * as VD from './vendors.js';
 import * as PO from './po.js';
+import * as VF from './verify.js';
 import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
@@ -72,6 +73,7 @@ const state = {
   pos: [],             // 發包單。PR 對 PO 是多對多，不是一對一
   bid: null,           // 加成設定（管理費／利潤／規費／準備金服務水準）
   missed: [],          // 最近一次自動抓量的漏項 —— 要接成金額保留，不可以在總價裡歸零
+  dims: null,          // 圖面標註 vs 幾何的比對 —— 圖面自己帶著答案，原本沒人去問它
   dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
   drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
   measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
@@ -479,7 +481,7 @@ function renderPkgs() {
 }
 
 function renderAll() {
-  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderPos(); renderDocs(); renderScope();
+  renderTree(); renderTable(); renderCart(); renderPkgs(); renderBaselines(); renderPos(); renderDocs(); renderScope(); renderVerifyChip();
   const pc = $('#projContract'); if (pc) pc.value = state.settings.contractType || 'remeasure';
   const pn = $('#projName'); if (pn && pn.value !== state.projName) pn.value = state.projName;
   if (state.analysis) {                       // 資料變了就重算，不讓畫面停在舊結論
@@ -566,6 +568,8 @@ function wire() {
   $('#calcChip').onclick = openCalcSheet;
   $('#btnDrawReset').onclick = openDrawingReset;
   $('#dupChip').onclick = openDupe;
+  $('#vfChip').onclick = openVerify;
+  $('#btnVerify').onclick = openVerify;
   $('#pkgs').addEventListener('input', (e) => {
     const t = e.target;
     const set = (attr, key) => { const i = t.getAttribute(attr); if (i != null) { state.packages[+i][key] = t.value; persist(); } };
@@ -822,7 +826,7 @@ async function loadPdfFile(file, buf, sig) {
   const pdf = await pdfjs.getDocument({ data: buf.slice(0) }).promise;
   state.drawing = { name: file.name, kind: 'pdf', pdf, pageNo: 1, pages: pdf.numPages, sig };
   // PDF 沒有 DXF 那一路的計算式表；不重設的話上一張 DXF 的晶片會留在工具列上
-  state.calc = null; state.encoding = null; state.survey = null; state.dupe = null;
+  state.calc = null; state.encoding = null; state.survey = null; state.dupe = null; state.dims = null;
   renderCalcChip(); renderDupeChip();
   await state.viewer.loadPdf(pdf, 1);
   switchMeasureContext(measureKeyOf(file.name, sig, 1));
@@ -940,6 +944,132 @@ function openTakeoffReport(written, missed) {
       「未對映」多半是註記層、圖框層，通常可以忽略 —— 但請確認清單上不該有的工項沒有因此漏掉。</p>`
       : '<p class="chip ok" style="display:block;padding:9px 11px">沒有漏項，每一個圖層都有處置。</p>'}
     <p class="hint">請切回清單檢查差異欄與可信度。自動抓量的結果標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。</p>`);
+}
+
+/* ══════════ 驗算中心 ══════════ */
+
+/** 蒐集目前所有可得的檢查結果，組成一份報告。 */
+function verifyContext() {
+  const items = state.items.filter((it) => Q.isNum(it.qty && it.qty.drawing));
+  return {
+    dimensions: state.dims,
+    dupe: state.dupe,
+    survey: state.survey,
+    pdfScale: state.pdfScale,
+    calc: state.calc,
+    items,
+    closure: VF.checkClosure(items),
+    magnitude: VF.checkMagnitude(items),
+    cross: VF.crossSources(state.items, { warn: state.settings.varianceWarn }),
+  };
+}
+
+function renderVerifyChip() {
+  const el = $('#vfChip');
+  if (!el) return;
+  const r = VF.report(verifyContext());
+  el.hidden = false;
+  el.style.cursor = 'pointer';
+  el.className = 'chip ' + (r.verdict === 'bad' ? 'bad' : r.verdict === 'warn' ? 'warn' : r.verdict === 'ok' ? 'ok' : '');
+  el.textContent = r.verdict === 'none' ? '驗算：無可驗'
+    : r.bad ? `驗算 ${r.bad} 項不過` : r.warn ? `驗算 ${r.warn} 項待確認` : `驗算 ${r.ok} 項通過`;
+}
+
+const VF_ICON = { ok: '✓', warn: '！', bad: '✗', none: '—' };
+
+/**
+ * 驗算報告。
+ *
+ * 最重要的一件事是把「已驗過」與「沒得驗」分開 ——
+ * 這兩件事在畫面上長得很像，意義卻完全相反。
+ * 「沒有發現錯誤」跟「沒有檢查」混在一起講，就是騙人。
+ */
+function openVerify() {
+  const ctx = verifyContext();
+  const r = VF.report(ctx);
+  const d = ctx.dimensions;
+
+  const rows = r.checks.map((c) => `<tr class="${c.status === 'bad' ? 'overdue' : c.status === 'warn' ? 'urgent' : ''}">
+    <td style="width:26px;text-align:center"><b class="${c.status === 'bad' ? 'neg' : c.status === 'ok' ? 'pos' : ''}">${VF_ICON[c.status]}</b></td>
+    <td>${esc(c.label)}</td>
+    <td><span class="chip ${c.status === 'bad' ? 'bad' : c.status === 'warn' ? 'warn' : c.status === 'ok' ? 'ok' : ''}">${
+      c.status === 'ok' ? '通過' : c.status === 'warn' ? '待確認' : c.status === 'bad' ? '不通過' : '沒得驗'}</span></td>
+    <td class="hint">${esc(c.msg)}</td></tr>`).join('');
+
+  // 標註比對的細節 —— 這是整份報告裡最有力的一段，值得攤開
+  const dimRows = d && d.rows ? d.rows.filter((x) => x.verdict === 'scale' || x.verdict === 'override')
+    .slice(0, 12).map((x) => `<tr class="${x.verdict === 'override' ? 'overdue' : 'urgent'}">
+      <td class="n">${Q.fmt(x.measured, 4)}</td>
+      <td class="n">${esc(x.text)}</td>
+      <td class="n">${x.ratio}</td>
+      <td>${x.verdict === 'scale' ? `<span class="chip warn">差 ${x.magnitude} 倍</span>`
+        : '<span class="chip bad">標註被覆寫</span>'}</td>
+      <td class="hint">${esc(x.layer || '')} @ ${Q.fmt(x.at ? x.at.x : 0, 0)}, ${Q.fmt(x.at ? x.at.y : 0, 0)}</td>
+    </tr>`).join('') : '';
+
+  dialog('驗算報告', `
+    <p class="chip ${r.verdict === 'bad' ? 'bad' : r.verdict === 'warn' ? 'warn' : r.verdict === 'ok' ? 'ok' : ''}"
+      style="display:block;padding:9px 11px;white-space:normal">${esc(r.note)}</p>
+
+    <table class="mkt" style="margin:10px 0"><thead><tr><th></th><th>檢查項目</th><th>結果</th><th>說明</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+
+    <p class="hint"><b>「沒得驗」不是「沒有錯」。</b>
+      這兩件事在畫面上長得很像，意義卻完全相反 —— 一張沒有標註、沒有計算式、
+      只有一條數量來源的圖，八項檢查可以一項都不亮紅燈，但它什麼都沒被驗過。</p>
+
+    <h4 style="margin:16px 0 6px">圖面標註 vs 幾何（最直接的一條）</h4>
+    ${!d || !d.total ? `<p class="hint">這張圖沒有 DIMENSION 標註實體，這條驗不了。</p>` : `
+      <div class="totrow"><span>標註總數</span><b>${d.total}</b></div>
+      <div class="totrow"><span>可比對（文字是明確數字）</span><b>${d.checked}</b></div>
+      <div class="totrow"><span>與幾何一致</span><b class="pos">${d.match}</b></div>
+      <div class="totrow"><span>差整數量級</span><b class="${d.scale ? 'neg' : ''}">${d.scale}</b></div>
+      <div class="totrow"><span>標註被覆寫</span><b class="${d.override ? 'neg' : ''}">${d.override}</b></div>
+      <div class="totrow"><span>未覆寫（用量到的值）／無法解析</span><b class="hint">${d.noOverride} / ${d.unparsed}</b></div>
+      ${dimRows ? `<table class="mat" style="margin-top:8px"><thead><tr><th class="n">幾何量到</th><th class="n">圖上印的</th>
+        <th class="n">比值</th><th>判定</th><th>位置</th></tr></thead><tbody>${dimRows}</tbody></table>` : ''}
+      ${d.dominant ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        <b>${d.dominant.count}/${d.checked} 個標註都差 ${d.dominant.magnitude} 倍</b> ——
+        這不是個別失誤，是整張圖的單位或比例設定就不對。
+        在改正之前，這張圖抓出來的<b>每一個數量都錯 ${d.dominant.magnitude} 倍</b>。</p>` : ''}
+      ${d.override ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        <b>${d.override} 個標註的文字被手動打成別的數字。</b>
+        這是圖面最危險的一種錯：<b>人看圖相信文字，程式量測相信幾何</b>，
+        兩邊永遠對不起來，而且誰都沒說謊。必須發 RFI 問設計單位以哪個為準。</p>` : ''}`}
+
+    <p class="hint" style="margin-top:14px">DXF 的 DIMENSION 實體同時存了兩個數字：
+      CAD <b>自己從幾何算出</b>的量測值（group 42），與圖上<b>印出來</b>的那行字（group 1）。
+      正常情況兩者一致；不一致時，比值是不是整數量級就分得出來是「單位／比例錯」還是「標註被改過」。
+      <b>圖面自己帶著答案</b>，這條檢查不需要任何外部資料。</p>`,
+    [{ label: '關閉' }, { label: '匯出 Excel', fn: () => exportVerify(r, ctx) }]);
+}
+
+function exportVerify(r, ctx) {
+  const sheets = [{ name: '驗算摘要', rows: [
+    ['檢查項目', '結果', '說明'],
+    ...r.checks.map((c) => [c.label,
+      c.status === 'ok' ? '通過' : c.status === 'warn' ? '待確認' : c.status === 'bad' ? '不通過' : '沒得驗',
+      c.msg]),
+    [], ['總評', r.note],
+  ] }];
+  const d = ctx.dimensions;
+  if (d && d.rows && d.rows.length) {
+    sheets.push({ name: '標註比對', rows: [
+      ['幾何量到', '圖上印的', '解出數字', '比值', '判定', '圖層', 'X', 'Y'],
+      ...d.rows.map((x) => [x.measured, x.text, x.stated ?? '', x.ratio ?? '',
+        { match: '一致', scale: `差 ${x.magnitude} 倍`, override: '標註被覆寫',
+          'no-override': '未覆寫', unparsed: '無法解析' }[x.verdict] || x.verdict,
+        x.layer || '', x.at ? x.at.x : '', x.at ? x.at.y : '']),
+    ] });
+  }
+  if (ctx.cross && ctx.cross.length) {
+    sheets.push({ name: '多來源比對', rows: [
+      ['工項代碼', '名稱', '來源數', '最大差異', '判定', '明細'],
+      ...ctx.cross.map((x) => [x.code, x.name, x.sources, x.spread ?? '',
+        x.level === 'ok' ? '一致' : x.level === 'warn' ? '待確認' : '不通過', x.detail || x.why]),
+    ] });
+  }
+  exportExcel('驗算報告', sheets);
 }
 
 /* ══════════ 廠商、請購單、發包單 ══════════ */
@@ -1492,7 +1622,10 @@ function dupeTol(v) {
 function runDupe() {
   const v = state.viewer;
   state.dupe = (v.mode === 'dxf' && v.doc) ? DD.analyze(v.flat, { tol: dupeTol(v) }) : null;
+  // 標註比對跟重複描繪一樣，是載入當下就該算的 —— 兩者都是「這張圖能不能信」的前提
+  state.dims = (v.mode === 'dxf' && v.doc) ? VF.checkDimensions(v.flat) : null;
   renderDupeChip();
+  renderVerifyChip();
 }
 
 function renderDupeChip() {
@@ -1777,8 +1910,8 @@ function unloadDrawing() {
   v.layerVisible = {};
   v.render();
   state.drawing = null;
-  state.calc = null; state.encoding = null; state.survey = null; state.pdfScale = null; state.dupe = null;
-  renderDupeChip();
+  state.calc = null; state.encoding = null; state.survey = null; state.pdfScale = null; state.dupe = null; state.dims = null;
+  renderDupeChip(); renderVerifyChip();
   $('#drawName').textContent = '未載入圖面';
   $('#pageChip').hidden = true;
   renderCalcChip(); updateScaleChip(); renderMeasureList(); persist();
@@ -4359,4 +4492,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, VF, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };

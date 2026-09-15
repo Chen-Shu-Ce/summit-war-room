@@ -1590,6 +1590,91 @@ ok('匯出內含逐層金額與投標總價',
 ok('匯出含延誤情境工作表', bidXl.sheets.some((s) => s.name.includes('延誤')));
 await closeDialog(page, 6);
 
+console.log('\n【7之十】驗算報告');
+// 使用者問：「如何知道程式讀取圖面的尺寸、數量有沒有誤？程式可有驗算功能？」
+// 最強的一條原本完全沒用到：DXF 的 DIMENSION 同時存了 CAD 自己量到的值（group 42）
+// 與圖上印出來的字（group 1）。圖面自己帶著答案。
+await page.locator('#tabView').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+
+// 標註與幾何一致的圖
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-dim-ok.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+const okDim = await page.evaluate(() => window.__takeoff.state.dims);
+ok('讀到 DIMENSION 標註實體', okDim.total === 3, JSON.stringify(okDim && { t: okDim.total }));
+ok('標註與幾何一致時判為 match', okDim.match === 3 && okDim.scale === 0 && okDim.override === 0,
+  JSON.stringify({ m: okDim.match, s: okDim.scale, o: okDim.override }));
+ok('不誤判成整張圖單位錯', okDim.dominant === null);
+
+// 標註差 1000 倍 + 一個被覆寫的圖
+await page.locator('#btnImportDrawing').click();
+await page.locator('#fileDrawing').setInputFiles(join(FIX, 'fixture-dim-bad.dxf'));
+await page.waitForTimeout(1500);
+await closeDialog(page, 6);
+const badDim = await page.evaluate(() => window.__takeoff.state.dims);
+ok('抓到 4 個標註與幾何差 1000 倍', badDim.scale === 4 && badDim.dominant
+  && badDim.dominant.magnitude === 1000, JSON.stringify({ s: badDim.scale, d: badDim.dominant }));
+ok('把「差整數量級」判成單位／比例錯，而不是標註錯',
+  badDim.rows.filter((r) => r.verdict === 'scale').length === 4);
+ok('抓到 1 個標註文字被手動覆寫（幾何 0.56 卻印 600）',
+  badDim.override === 1 && badDim.rows.some((r) => r.verdict === 'override' && r.stated === 600),
+  JSON.stringify(badDim.rows.filter((r) => r.verdict === 'override')));
+ok('每一筆都留座標與圖層，找得到是哪一個標註',
+  badDim.rows.every((r) => r.at && r.layer), JSON.stringify(badDim.rows[0]));
+
+// 工具列晶片
+ok('工具列出現驗算晶片', await page.locator('#vfChip').isVisible());
+ok('晶片直接寫出幾項不過', /驗算 \d+ 項不過/.test(await page.locator('#vfChip').innerText()),
+  await page.locator('#vfChip').innerText());
+
+// 報告視窗
+await page.locator('#vfChip').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(300);
+const vfTxt = await page.locator('#dlgBody').innerText();
+ok('報告列出八項檢查', (vfTxt.match(/通過|待確認|不通過|沒得驗/g) || []).length >= 8, vfTxt.slice(0, 200));
+ok('明確區分「已驗過」與「沒得驗」', vfTxt.includes('沒得驗') && vfTxt.includes('「沒得驗」不是「沒有錯」'),
+  vfTxt.slice(0, 600));
+ok('整張圖差一個量級時，說明「每一個數量都錯 1000 倍」',
+  vfTxt.includes('每一個數量都錯 1000 倍'), vfTxt.slice(-900));
+ok('標註被覆寫時，說明人看文字、程式看幾何',
+  vfTxt.includes('人看圖相信文字，程式量測相信幾何'), vfTxt.slice(-700));
+ok('攤開逐筆比對（幾何量到 / 圖上印的 / 比值）',
+  vfTxt.includes('幾何量到') && vfTxt.includes('圖上印的') && vfTxt.includes('比值'));
+ok('說明資料來源是 group 42 與 group 1', vfTxt.includes('group 42') && vfTxt.includes('group 1'));
+
+// 匯出
+const vfDl = page.waitForEvent('download');
+await page.locator('#dlgFoot button').filter({ hasText: '匯出' }).click();
+const vfXl = readXlsx(await readFile(await (await vfDl).path()));
+ok('驗算報告可匯出 Excel', vfXl.sheets.some((s) => s.name.includes('驗算摘要')),
+  vfXl.sheets.map((s) => s.name).join('|'));
+ok('匯出含標註逐筆比對', vfXl.sheets.some((s) => s.name.includes('標註比對')));
+ok('匯出含多來源比對', vfXl.sheets.some((s) => s.name.includes('多來源')));
+await closeDialog(page, 6);
+
+// 從標題列也開得到
+await page.locator('#btnVerify').click();
+await page.waitForSelector('#dlg[open]');
+ok('標題列的「驗算」按鈕開得起同一份報告',
+  (await page.locator('#dlgTitle').innerText()).includes('驗算報告'));
+await closeDialog(page, 6);
+
+// 八項全無可驗時不可以說通過
+const empty = await page.evaluate(() => window.__takeoff.VF.report({}));
+ok('八項全是「沒得驗」時不算通過', empty.passed === false && empty.verdict === 'none', JSON.stringify(empty.note));
+ok('並且明說「這不是沒有錯誤，是沒有檢查」', /沒有檢查/.test(empty.note), empty.note);
+
+// 人工量測的面積不該被誤判未閉合（曾經的誤報）
+const closure = await page.evaluate(() => {
+  const { VF, state, Q } = window.__takeoff;
+  return VF.checkClosure(state.items.filter((it) => Q.isNum(it.qty && it.qty.drawing)));
+});
+ok('人工量測的面積不會被誤判成未閉合', closure.length === 0, JSON.stringify(closure));
+
 console.log('\n【8】重整後狀態保留');
 const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);
 ok('（前置）331.01 確實有圖面量可供驗證持久化', typeof drawBefore === 'number', String(drawBefore));
