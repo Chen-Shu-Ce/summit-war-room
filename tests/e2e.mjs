@@ -1675,6 +1675,96 @@ const closure = await page.evaluate(() => {
 });
 ok('人工量測的面積不會被誤判成未閉合', closure.length === 0, JSON.stringify(closure));
 
+console.log('\n【7之十一】匯出範圍要寫在臉上');
+// 使用者看著匯出視窗問：「這是全部圖面的工項？還是單張圖面的工項？」
+// 畫面上只寫「BOQ-全部…30 筆」，沒有一個字說明「全部」是指什麼。
+// 答案是都不是：匯出的是「本專案 BOM 的工項」，而這些工項的圖面量
+// 可能來自好幾張不同的圖，也可能根本沒有圖面量。
+await page.locator('#tabList').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+
+// 造出「數量來自三張不同的圖 + 一筆舊版」的情境。
+// 圖面量也一併設定 —— 前面十個段落可能已經把某些工項的圖面量清掉了，
+// 依賴殘留狀態的測試本來就脆弱。
+const scopeBefore = await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  const keep = {};
+  const set = (code, drawing, kind) => {
+    const it = s.itemByCode.get(code);
+    keep[code] = { p: it.provenance || null, stale: !!it.drawingStale, q: it.qty.drawing };
+    it.qty.drawing = 100;
+    it.provenance = { kind, drawing, layer: 'X', measurements: [], at: '' };
+  };
+  set('321.01', 'A-電氣平面圖.dwg', 'dxf-layer');
+  set('321.02', 'A-電氣平面圖.dwg', 'dxf-layer');
+  set('322.01', 'B-給排水平面圖.dwg', 'measure');
+  set('323.01', 'C-空調平面圖.dwg', 'dxf-layer');
+  s.itemByCode.get('323.01').drawingStale = true;
+  window.__takeoff.renderAll();
+  return keep;
+});
+
+// 選單本身要先講清楚
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(200);
+const menuTxt = await page.locator('#dlgBody').innerText();
+ok('按鈕名稱直接寫明範圍（全部工項 / 已勾選）',
+  menuTxt.includes('全部工項') && menuTxt.includes('跨所有圖面') && menuTxt.includes('已勾選'), menuTxt.slice(0, 120));
+ok('選單明說「這是 BOM 工項清單，不是某一張圖的清單」',
+  menuTxt.includes('不是「某一張圖的清單」'), menuTxt.slice(0, 400));
+ok('並告訴使用者要單張圖該怎麼做', menuTxt.includes('請先在清單上勾選'), menuTxt.slice(0, 500));
+
+// 匯出後的範圍摘要
+await page.locator('#eAll').click();
+await page.waitForTimeout(700);
+const scopeTxt = await page.locator('#dlgBody').innerText();
+ok('匯出視窗有「匯出範圍」區塊', scopeTxt.includes('匯出範圍'), scopeTxt.slice(0, 200));
+ok('寫出範圍標籤與工項數', scopeTxt.includes('本專案 BOM 的全部工項') && /30 個工項/.test(scopeTxt),
+  scopeTxt.slice(0, 300));
+ok('逐張列出圖面量的出處，並標出各有幾個工項',
+  ['A-電氣平面圖.dwg', 'B-給排水平面圖.dwg', 'C-空調平面圖.dwg'].every((d) => scopeTxt.includes(d)),
+  scopeTxt.slice(0, 700));
+ok('同一張圖的兩個工項會合併計數（A 圖 2 筆）',
+  /A-電氣平面圖\.dwg\s*2/.test(scopeTxt.replace(/\t/g, ' ')), scopeTxt.slice(0, 700));
+ok('把「沒有圖面量」的工項單獨列出來 —— 那些數量不是從圖上量的',
+  scopeTxt.includes('沒有圖面量'), scopeTxt.slice(0, 800));
+ok('橫跨多張圖時主動提醒，並給出縮小範圍的做法',
+  scopeTxt.includes('橫跨') && scopeTxt.includes('已勾選'), scopeTxt.slice(0, 900));
+ok('舊版圖的圖面量在匯出前被標出來',
+  scopeTxt.includes('標記為舊版') || scopeTxt.includes('舊版'), scopeTxt.slice(0, 1000));
+await closeDialog(page, 6);
+
+// 已勾選那一顆的範圍標籤要不一樣
+await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  s.selected = new Set(['321.01', '321.02']);
+  window.__takeoff.renderAll();
+});
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+await page.locator('#eSel').click();
+await page.waitForTimeout(700);
+const selTxt = await page.locator('#dlgBody').innerText();
+ok('「已勾選」的範圍標籤與「全部」不同', selTxt.includes('已勾選的工項') && /2 個工項/.test(selTxt),
+  selTxt.slice(0, 300));
+ok('只來自一張圖時不再提醒「橫跨多張圖」', !selTxt.includes('橫跨'), selTxt.slice(0, 600));
+await closeDialog(page, 6);
+
+// 還原
+await page.evaluate((keep) => {
+  const s = window.__takeoff.state;
+  for (const [code, v] of Object.entries(keep)) {
+    const it = s.itemByCode.get(code);
+    it.provenance = v.p;
+    it.drawingStale = v.stale;
+    it.qty.drawing = v.q;
+  }
+  s.selected = new Set();
+  window.__takeoff.renderAll();
+}, scopeBefore);
+
 console.log('\n【8】重整後狀態保留');
 const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);
 ok('（前置）331.01 確實有圖面量可供驗證持久化', typeof drawBefore === 'number', String(drawBefore));

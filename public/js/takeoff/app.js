@@ -3779,6 +3779,73 @@ function isEmbedded() {
 }
 
 /**
+ * 匯出範圍摘要 —— 回答「這一份到底匯了什麼」。
+ *
+ * 原本畫面上只寫「已產生 BOQ-全部…30 筆資料」，沒有一個字說明「全部」是指什麼。
+ * 使用者問的正是這個：全部圖面的工項？還是單張圖面的工項？
+ *
+ * 答案是**都不是**：匯出的是**本專案 BOM 的工項**，
+ * 而這些工項的圖面量可能來自**好幾張不同的圖**，也可能根本沒有圖面量
+ * （數量來自 BOQ、人工確認或計算式）。
+ *
+ * 這個函式把那件事算出來：幾筆有圖面量、分別來自哪幾張圖、幾筆沒有。
+ * 匯出的是一份要寄出去、要拿去對帳的檔案 —— 它涵蓋什麼，必須寫在臉上。
+ */
+function exportScope(items, label) {
+  const byDrawing = new Map();
+  let noDrawing = 0, stale = 0, noProv = 0;
+  for (const it of items) {
+    if (!Q.isNum(it.qty && it.qty.drawing)) { noDrawing++; continue; }
+    const d = (it.provenance && it.provenance.drawing) || '';
+    if (!d) { noProv++; continue; }
+    byDrawing.set(d, (byDrawing.get(d) || 0) + 1);
+    if (it.drawingStale) stale++;
+  }
+  return {
+    label, total: items.length,
+    drawings: [...byDrawing.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n),
+    withDrawing: items.length - noDrawing - noProv,
+    noDrawing, noProv, stale,
+    current: state.drawing ? state.drawing.name : null,
+  };
+}
+
+/** 把範圍摘要畫成一段人話。 */
+function scopeHtml(sc) {
+  if (!sc) return '';
+  const many = sc.drawings.length > 1;
+  return `
+    <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0">
+      <div style="font-weight:700;margin-bottom:6px">匯出範圍</div>
+      <div class="totrow"><span>${esc(sc.label)}</span><b>${sc.total} 個工項</b></div>
+      <p class="hint" style="margin:6px 0 0"><b>這是工項清單，不是「某一張圖的清單」。</b>
+        同一份清單裡的圖面量可能來自不同張圖，也可能根本不是從圖上量的。</p>
+
+      ${sc.drawings.length ? `<table class="mat" style="margin-top:8px">
+        <thead><tr><th>圖面量的出處</th><th class="n">工項數</th></tr></thead><tbody>
+        ${sc.drawings.map((d) => `<tr><td>${esc(d.name)}${sc.current === d.name ? ' <span class="chip acc">目前載入</span>' : ''}</td>
+          <td class="n">${d.n}</td></tr>`).join('')}
+        ${sc.noProv ? `<tr><td class="hint">有圖面量但沒記錄出處</td><td class="n">${sc.noProv}</td></tr>` : ''}
+        ${sc.noDrawing ? `<tr><td class="hint">沒有圖面量（數量來自 BOQ／人工確認／計算式）</td><td class="n">${sc.noDrawing}</td></tr>` : ''}
+        </tbody></table>`
+    : `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        這 ${sc.total} 個工項<b>都沒有圖面量</b> —— 數量來自 BOQ、人工確認或計算式，不是從圖上量出來的。</p>`}
+
+      ${many ? `<p class="chip acc" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        這份清單橫跨 <b>${sc.drawings.length} 張圖</b>。若你要的是「單張圖的工項」，
+        請先在清單上用搜尋或勾選縮小範圍，再用「清單上<b>已勾選</b>的工項 Excel」那一顆。</p>` : ''}
+
+      ${sc.current && !sc.drawings.some((d) => d.name === sc.current) ? `
+        <p class="hint" style="margin-top:8px">目前載入的是《${esc(sc.current)}》，但這份匯出裡<b>沒有</b>任何一筆數量來自它
+        —— 匯出的範圍與「現在打開哪張圖」無關。</p>` : ''}
+
+      ${sc.stale ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        其中 <b>${sc.stale}</b> 筆的圖面量標記為<b>舊版</b>（該圖已改版，數量還是上一版算的）。
+        這份檔案匯出去之前請先處理。</p>` : ''}
+    </div>`;
+}
+
+/**
  * 匯出 Excel。這是全站唯一的匯出出口。
  *
  * 為什麼不是 CSV：CSV 沒有編碼欄位，Excel 只能拿系統碼頁去猜，
@@ -3804,6 +3871,7 @@ function exportExcel(baseName, sheets, opts = {}) {
   const tsv = prepared.length === 1 ? XL.toTsv(prepared[0].rows) : '';
   dialog('匯出 Excel', `
     <p>已產生 <b>${esc(file)}</b>　${prepared.length} 張工作表、${total} 筆資料。</p>
+    ${scopeHtml(opts.scope)}
     <table class="mkt" style="margin:8px 0"><thead><tr><th>工作表</th><th class="n">筆數</th><th class="n">欄數</th></tr></thead>
       <tbody>${prepared.map((x) => `<tr><td>${esc(x.name)}</td><td class="n">${x.rows.length - 1}</td>
         <td class="n">${Math.max(...x.rows.map((r) => r.length))}</td></tr>`).join('')}</tbody></table>
@@ -3871,25 +3939,32 @@ const CSV_HEAD = ['WBS', '工項代碼', '名稱', '規格', '單位', '圖面�
 function openExport() {
   dialog('匯出', `
     <div style="display:grid;gap:8px">
-      <button class="btn" id="eAll">全部工項 Excel</button>
-      <button class="btn" id="eSel">已選工項 Excel</button>
+      <button class="btn" id="eAll">本專案<b>全部工項</b> Excel（跨所有圖面）</button>
+      <button class="btn" id="eSel">清單上<b>已勾選</b>的工項 Excel</button>
       <button class="btn" id="ePkg">所有採購包 RFQ Excel（一包一張工作表）</button>
       <button class="btn" id="eJson">專案 JSON（含來源與簽核紀錄）</button>
     </div>
+    <p class="chip acc" style="display:block;padding:8px 10px;margin-top:10px;white-space:normal">
+    這裡匯出的是 <b>BOM 工項清單</b>，不是「某一張圖的清單」。
+    工具的 BOM 橫跨整個專案，同一份清單裡的圖面量可能來自好幾張圖，
+    也可能根本不是從圖上量的（BOQ／人工確認／計算式）。
+    <b>要匯出單張圖的工項，請先在清單上勾選那些工項，再用「已勾選」那一顆。</b>
+    每次匯出都會列出這一份的數量分別來自哪幾張圖。</p>
     <p class="hint" style="margin-top:10px">匯出的是 .xlsx，內部是 UTF-8 XML，Excel 不需要猜編碼，中文不會亂碼
     （CSV 沒有編碼欄位，繁中 Windows 會猜成 Big5，這是過去亂碼的來源）。
     匯出檔保留「判定規則、簽核人、確認理由、數量出處」四欄 —— 這四欄才是稽核時真正被問的東西。</p>`,
     [{ label: '關閉' }], (body, gen) => {
-      body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部'); dlgClose(gen); };
-      body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選'); dlgClose(gen); };
+      body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部', '本專案 BOM 的全部工項'); dlgClose(gen); };
+      body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選', '清單上已勾選的工項'); dlgClose(gen); };
       body.querySelector('#ePkg').onclick = () => { exportAllPackages(); dlgClose(gen); };
       body.querySelector('#eJson').onclick = () => { exportProject(); dlgClose(gen); };
     });
 }
 
-function exportCsv(items, name) {
+function exportCsv(items, name, scopeLabel) {
   if (!items.length) return dialog('沒有資料', '<p>清單是空的。</p>');
-  exportExcel(name, [{ name: '工程量清單', rows: [CSV_HEAD, ...items.map(itemRow)] }]);
+  exportExcel(name, [{ name: '工程量清單', rows: [CSV_HEAD, ...items.map(itemRow)] }],
+    { scope: exportScope(items, scopeLabel || '本次匯出') });
 }
 
 /** 單一採購包的詢價單列 —— 抬頭三列 + 空列 + 表頭 + 明細。 */
@@ -3905,7 +3980,9 @@ function packageRows(pkg) {
 }
 
 function exportPackageCsv(pkg) {
-  exportExcel(`RFQ-${pkg.code}`, [{ name: '詢價單', rows: packageRows(pkg) }]);
+  const items = pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean);
+  exportExcel(`RFQ-${pkg.code}`, [{ name: '詢價單', rows: packageRows(pkg) }],
+    { scope: exportScope(items, `採購包 ${pkg.code}${pkg.name ? ' ' + pkg.name : ''} 的工項`) });
 }
 
 /**
@@ -3922,7 +3999,8 @@ function exportAllPackages() {
     name: XL.safeSheetName(pkg.code || pkg.name || '採購包', used),
     rows: packageRows(pkg),
   }));
-  exportExcel('RFQ-全部採購包', sheets);
+  const all = state.packages.flatMap((pkg) => pkg.itemCodes.map((c) => state.itemByCode.get(c)).filter(Boolean));
+  exportExcel('RFQ-全部採購包', sheets, { scope: exportScope(all, `全部 ${state.packages.length} 個採購包的工項`) });
 }
 
 function exportProject() {
