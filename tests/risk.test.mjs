@@ -238,3 +238,68 @@ test('單點百分位：三角分布也互為逆運算', () => {
     near(R.percentileOfWaste(R.DISTS.triangular.inv(q, d), d, 'triangular'), q, 1e-6, `q=${q}`);
   }
 });
+
+/* ══════════ 價格風險 ══════════ */
+/*
+ * 使用者說真正吃虧的是「發包時報價比估價高」，但原本的模擬只擾動數量、
+ * 單價是常數 —— 那個 P80 是「數量的 P80」，不是承包價的 P80。
+ */
+
+const PITEMS = [
+  { code: 'A', name: '電纜', unit: 'M', measureType: 'length', unitPrice: 800,
+    qty: { drawing: 1000 }, wasteDist: { min: 0.02, mode: 0.03, max: 0.08 } },
+  { code: 'B', name: '電纜架', unit: 'M', measureType: 'length', unitPrice: 2400,
+    qty: { drawing: 400 }, wasteDist: { min: 0.02, mode: 0.05, max: 0.10 } },
+];
+const PSET = { iterations: 4000, seed: 7, correlation: 0.3, dist: 'pert', defaultWasteRate: 0.03 };
+
+test('不傳 priceDist 時，結果與加功能之前完全相同（連亂數都不多抽）', () => {
+  const a = R.simulatePortfolio(PITEMS, PSET);
+  const b = R.simulatePortfolio(PITEMS, PSET, { priceDist: null });
+  assert.equal(a.cost.p80, b.cost.p80);
+  assert.equal(a.priceRisk, null);
+});
+
+test('開啟價格風險後 P80 一定變高 —— 報價分布向上偏', () => {
+  const off = R.simulatePortfolio(PITEMS, PSET);
+  const on = R.simulatePortfolio(PITEMS, PSET, { priceDist: { min: -0.02, mode: 0, max: 0.08 } });
+  assert.ok(on.cost.p80 > off.cost.p80, `${on.cost.p80} 應大於 ${off.cost.p80}`);
+  assert.ok(on.priceRisk && on.priceRisk.dist.max === 0.08);
+});
+
+test('對稱的價格分布不該讓 P50 明顯偏移，但會把分布拉寬', () => {
+  const off = R.simulatePortfolio(PITEMS, PSET);
+  const on = R.simulatePortfolio(PITEMS, PSET, { priceDist: { min: -0.05, mode: 0, max: 0.05 } });
+  assert.ok(Math.abs(on.cost.p50 - off.cost.p50) / off.cost.p50 < 0.01,
+    `P50 偏移 ${(on.cost.p50 - off.cost.p50) / off.cost.p50}`);
+  assert.ok(on.cost.p95 - on.cost.p50 > off.cost.p95 - off.cost.p50, '分布沒有變寬');
+});
+
+test('價格波動越大，P80 越高', () => {
+  const small = R.simulatePortfolio(PITEMS, PSET, { priceDist: { min: 0, mode: 0.01, max: 0.02 } });
+  const big = R.simulatePortfolio(PITEMS, PSET, { priceDist: { min: 0, mode: 0.05, max: 0.20 } });
+  assert.ok(big.cost.p80 > small.cost.p80);
+});
+
+test('價格相關性越高，整包風險越大（分散效益越小）', () => {
+  const pd = { min: -0.02, mode: 0, max: 0.10 };
+  const indep = R.simulatePortfolio(PITEMS, { ...PSET, priceCorrelation: 0 }, { priceDist: pd });
+  const together = R.simulatePortfolio(PITEMS, { ...PSET, priceCorrelation: 1 }, { priceDist: pd });
+  assert.ok(together.cost.p95 > indep.cost.p95,
+    `完全同漲 ${together.cost.p95} 應大於各自獨立 ${indep.cost.p95}`);
+});
+
+test('逐項回報模擬後的單價分布，可看出哪一項的價格風險最大', () => {
+  const r = R.simulatePortfolio(PITEMS, PSET, { priceDist: { min: -0.02, mode: 0, max: 0.08 } });
+  const a = r.items.find((x) => x.code === 'A');
+  assert.ok(a.price && a.price.p80 > 800, `A 的單價 P80 ${a.price && a.price.p80}`);
+  assert.ok(a.price.p50 > 780 && a.price.p50 < 830, `A 的單價 P50 ${a.price.p50}`);
+});
+
+test('計數類工項的數量不模擬，但價格仍然會被模擬 —— 燈具也會漲價', () => {
+  const items = [{ code: 'C', name: '燈', unit: '只', measureType: 'count', unitPrice: 4000, qty: { drawing: 100 } }];
+  const off = R.simulatePortfolio(items, PSET);
+  const on = R.simulatePortfolio(items, PSET, { priceDist: { min: 0, mode: 0.03, max: 0.10 } });
+  assert.equal(off.cost.p80, off.cost.p50, '數量不模擬時，關閉價格風險的成本應該是定值');
+  assert.ok(on.cost.p80 > on.cost.p50, '開啟價格風險後，計數類也要有分布');
+});

@@ -184,6 +184,10 @@ export const DEFAULT_SIM = {
   correlation: 0.3,      // 同案場工班/工法造成的正相關；設 0 可看獨立假設下差多少
   dist: 'pert',
   serviceLevel: 0.8,     // 採購基準用的服務水準（P80）
+  // 價格風險預設關閉 —— 開了會改變既有專案的 P80，必須是使用者明確決定。
+  // 開啟時的典型值：{ min: -0.02, mode: 0, max: 0.08 }（報價向上偏）
+  priceDist: null,
+  priceCorrelation: 0.6, // 同市場同批廠商，價格的相關性比數量高
 };
 
 /** 只有材料類才有損耗分布可言。計數類、統包項不模擬。 */
@@ -315,11 +319,30 @@ export function simulatePortfolio(items, settings = {}, opts = {}) {
   const n = s.iterations;
   const rand = mulberry32(s.seed);
   const sqrtRho = Math.sqrt(rho), sqrtAnti = Math.sqrt(1 - rho);
+
+  // ── 價格風險 ──
+  //
+  // 原本只擾動數量，等於假設「發包時的報價一定等於估價時的單價」。
+  // 使用者說真正吃虧的正是這一段：發包時報價比估價高。
+  //
+  // 開啟方式是傳入 priceDist（相對偏差的三點估計，例如
+  // { min: -0.02, mode: 0, max: 0.08 } —— 刻意不對稱，因為報價向上偏的機會
+  // 遠大於向下）。**不傳就完全不動**：連亂數都不會多抽一個，
+  // 既有結果逐位元相同，不會因為加了功能就讓舊的基準版對不起來。
+  const pd = opts.priceDist || s.priceDist || null;
+  const priceTable = pd && Q.isNum(pd.min) && Q.isNum(pd.mode) && Q.isNum(pd.max)
+    ? makeQuantileTable(s.dist, pd) : null;
+  // 價格的相關性比數量高：同一個市場、同一批廠商，漲是一起漲。
+  const rhoP = Math.min(Math.max(Q.isNum(s.priceCorrelation) ? s.priceCorrelation : 0.6, 0), 1);
+  const sqrtRhoP = Math.sqrt(rhoP), sqrtAntiP = Math.sqrt(1 - rhoP);
+
   const totalCost = new Array(n);
   const perItem = usable.map(() => new Array(n));
+  const perPrice = priceTable ? usable.map(() => new Array(n)) : null;
 
   for (let k = 0; k < n; k++) {
     const zc = normalInv(rand());
+    const zp = priceTable ? normalInv(rand()) : 0;   // 價格的共同因子
     let cost = 0;
     for (let j = 0; j < usable.length; j++) {
       const u = usable[j];
@@ -329,7 +352,13 @@ export function simulatePortfolio(items, settings = {}, opts = {}) {
         q = u.base * (1 + lookup(u.table, normalCdf(z)));
       }
       perItem[j][k] = q;
-      if (u.price != null) cost += q * u.price;
+      let price = u.price;
+      if (priceTable && price != null) {
+        const z = sqrtRhoP * zp + sqrtAntiP * normalInv(rand());
+        price = u.price * (1 + lookup(priceTable, normalCdf(z)));
+        perPrice[j][k] = price;
+      }
+      if (price != null) cost += q * price;
     }
     totalCost[k] = cost;
   }
@@ -337,6 +366,7 @@ export function simulatePortfolio(items, settings = {}, opts = {}) {
   const itemStats = usable.map((u, j) => ({
     code: u.item.code, name: u.item.name, unit: u.item.unit, base: u.base,
     stochastic: u.stoch, qty: stats(perItem[j]),
+    price: perPrice ? stats(perPrice[j]) : null,
   }));
 
   // 加總謬誤對照：各項 P80 相加 vs 整包 P80
@@ -351,6 +381,7 @@ export function simulatePortfolio(items, settings = {}, opts = {}) {
 
   return {
     iterations: n, correlation: rho, dist: s.dist, seed: s.seed,
+    priceRisk: priceTable ? { dist: pd, correlation: rhoP } : null,
     items: itemStats, cost,
     sumOfP80: Q.roundTo(sumOfP80, 2),
     portfolioP80: cost.p80,

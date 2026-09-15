@@ -1375,6 +1375,85 @@ ok('細節視窗逐圖層攤開', dupTxt.includes('E-TRAY') && dupTxt.includes('
 ok('說明「重複長度 = 總長 − 聯集長度」的定義', dupTxt.includes('聯集'), dupTxt.slice(0, 160));
 await closeDialog(page, 6);
 
+console.log('\n【7之八】投標價組成');
+// 使用者問「承包價中有含風險價嗎」—— 答案是沒有。清單上的「預估金額」是
+// 採購成本：未稅、無管理費、無利潤、無風險準備。這一段補上中間那三層。
+// 參數是使用者自述的實際作法：管理費 10%、利潤 10%、規費佔合約價 1%、稅 5%。
+await page.locator('#tabList').click();
+await page.waitForTimeout(200);
+await closeDialog(page, 6);
+await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  s.selected = new Set(s.items.map((i) => i.code));
+  window.__takeoff.renderAll();
+});
+
+// 先用固定數字驗算術本身，不受清單金額波動影響
+const math = await page.evaluate(() => {
+  const { BD } = window.__takeoff;
+  const r = BD.buildUp(1000000);
+  return { preTax: r.preTax, tax: r.tax, total: r.total,
+    oh: r.lines.find((x) => x.key === 'overhead'),
+    pf: r.lines.find((x) => x.key === 'profit'),
+    fee: r.lines.find((x) => x.key === 'fees') };
+});
+ok('管理費 10% 算在直接成本上（100 萬 → 10 萬）', math.oh.amount === 100000, String(math.oh.amount));
+ok('利潤算在「成本＋管理費」上（110 萬 → 11 萬，不是 10 萬）',
+  math.pf.amount === 110000 && math.pf.base === 1100000, JSON.stringify(math.pf));
+ok('規費「佔合約價 1%」要用除的：121 萬 ÷ 0.99 = 1,222,222.22',
+  Math.abs(math.preTax - 1222222.22) < 0.02, String(math.preTax));
+ok('用乘的會少算 —— 規費應是 12,222 而非 12,100',
+  math.fee.amount > 12100, String(math.fee.amount));
+ok('規費 ÷ 標價 剛好等於費率（這是「佔標價」的定義）',
+  Math.abs(math.fee.amount / math.preTax - 0.01) < 1e-6);
+ok('總價 = 未稅 × 1.05', Math.abs(math.total - 1283333.33) < 0.02, String(math.total));
+
+// 價格風險：只能有一個開關。
+// 這一組是為了擋住我自己犯過的錯 —— 曾經同時存在 priceRiskOn 與 priceDist
+// 兩個旗標，priceDist 一進 settings 就讓風險模擬繞過開關，分散效益變成負的。
+const riskGate = await page.evaluate(() => {
+  const { state, R } = window.__takeoff;
+  const items = state.items.slice(0, 8);
+  const off = R.simulatePortfolio(items, { ...state.settings, priceDist: null });
+  const on = R.simulatePortfolio(items, { ...state.settings, priceDist: { min: -0.02, mode: 0, max: 0.08 } });
+  return { offRisk: off && off.priceRisk, onRisk: !!(on && on.priceRisk),
+    offP80: off && off.cost.p80, onP80: on && on.cost.p80,
+    settingHas: Object.prototype.hasOwnProperty.call(state.settings, 'priceDist'),
+    settingVal: state.settings.priceDist };
+});
+ok('價格風險預設關閉', riskGate.settingHas && riskGate.settingVal === null, JSON.stringify(riskGate.settingVal));
+ok('關閉時模擬不帶價格風險', riskGate.offRisk === null);
+ok('開啟時 P80 會變高（發包時報價比估價高）',
+  riskGate.onRisk && riskGate.onP80 > riskGate.offP80, `${riskGate.onP80} vs ${riskGate.offP80}`);
+
+// 視窗本身
+await page.locator('#btnBid').click();
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(500);
+const bidTxt = await page.locator('#dlgBody').innerText();
+ok('視窗開得起來並標明「預估金額是採購成本不是承包價」',
+  bidTxt.includes('採購成本') && bidTxt.includes('承包價'), bidTxt.slice(0, 120));
+ok('逐層攤開並標出每一層的計算基數',
+  bidTxt.includes('計算基數') && bidTxt.includes('工地管理費') && bidTxt.includes('利潤'), bidTxt.slice(0, 200));
+ok('明講「佔標價」與「成本加成」是兩種數學', bidTxt.includes('必須用除的'));
+ok('風險準備金由模擬推導並寫出依據', bidTxt.includes('P50'), bidTxt.slice(0, 400));
+ok('價格風險關閉時明說準備金只涵蓋數量風險',
+  bidTxt.includes('只涵蓋') && bidTxt.includes('數量'), bidTxt.slice(0, 500));
+ok('逾期罰款以情境呈現（每日千分之一）', bidTxt.includes('逾期罰款') && bidTxt.includes('1.0‰'));
+ok('算得出罰款吃光利潤要幾天', /延誤 \d+ 天，罰款就吃光全部利潤/.test(bidTxt), bidTxt.slice(-400));
+ok('明說費率是公司的商業決定，工具不替你決定', bidTxt.includes('商業決定'));
+
+// 匯出
+const bidDl = page.waitForEvent('download');
+await page.locator('#dlgFoot button').filter({ hasText: '匯出' }).click();
+const bidXl = readXlsx(await readFile(await (await bidDl).path()));
+ok('投標價組成可匯出 Excel', bidXl.sheets.some((s) => s.name.includes('投標價組成')),
+  bidXl.sheets.map((s) => s.name).join('|'));
+ok('匯出內含逐層金額與投標總價',
+  bidXl.text.includes('投標總價') && bidXl.text.includes('工地管理費'), bidXl.text.slice(0, 200));
+ok('匯出含延誤情境工作表', bidXl.sheets.some((s) => s.name.includes('延誤')));
+await closeDialog(page, 6);
+
 console.log('\n【8】重整後狀態保留');
 const drawBefore = await page.evaluate(() => window.__takeoff.state.itemByCode.get('331.01').qty.drawing);
 ok('（前置）331.01 確實有圖面量可供驗證持久化', typeof drawBefore === 'number', String(drawBefore));

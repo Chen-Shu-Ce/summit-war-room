@@ -20,6 +20,7 @@ import * as SV from './survey.js';
 import * as PS from './pdfscale.js';
 import * as LM from './layermatch.js';
 import * as DD from './dedupe.js';
+import * as BD from './bid.js';
 import * as XL from './xlsx.js';
 
 const LS_KEY = 'summit.takeoff.v1';
@@ -65,6 +66,8 @@ const state = {
   survey: null,        // 座標與單位合理性檢查
   pdfScale: null,      // 從 PDF 圖框讀到的比例宣告
   surveyFixed: null,   // 使用者確認過的單位修正
+  bid: null,           // 加成設定（管理費／利潤／規費／準備金服務水準）
+  missed: [],          // 最近一次自動抓量的漏項 —— 要接成金額保留，不可以在總價裡歸零
   dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
   drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
   measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
@@ -84,6 +87,17 @@ async function init() {
     prTemplate: B.DEFAULT_PR_TEMPLATE, taxRate: 0.05, dept: '', project: '',
     erpProfile: 'generic', erpMapping: { header: {}, line: {} }, requireErpCode: true,
     ...R.DEFAULT_SIM, stochastic: true,
+    // 投標價組成 —— 數字來自使用者自述的實際作法，不是預設猜的
+    markups: BD.DEFAULT_MARKUPS.map((m) => ({ ...m })),
+    reserveLevel: 0.8,          // 風險準備金取的服務水準
+    // 價格風險：**只有一個旗標**。
+    // 一開始我放了 priceRiskOn 與 priceDist 兩個，結果 priceDist 一進 settings，
+    // simulatePortfolio 就直接讀到它 —— 風險模擬那條路完全繞過了開關，
+    // 分散效益瞬間變成負的（e2e 立刻抓到）。兩個會互相矛盾的旗標就是 bug 本身。
+    // 現在 null = 關、有值 = 開，沒有第二個地方可以說謊。
+    priceDist: null,
+    delayDailyRate: 0.001,      // 逾期罰款每日千分之一
+
     ...(state.template.settings || {}),
   };
   buildModel(state.template);
@@ -535,6 +549,7 @@ function wire() {
   $('#btnToPkg').onclick = toPackage;
   $('#btnAutoPkg').onclick = autoPackage;
   $('#btnSim').onclick = openPortfolioSim;
+  $('#btnBid').onclick = openBid;
   $('#btnMarket').onclick = openMarket;
   $('#calcChip').onclick = openCalcSheet;
   $('#btnDrawReset').onclick = openDrawingReset;
@@ -900,6 +915,159 @@ function openTakeoffReport(written, missed) {
       「未對映」多半是註記層、圖框層，通常可以忽略 —— 但請確認清單上不該有的工項沒有因此漏掉。</p>`
       : '<p class="chip ok" style="display:block;padding:9px 11px">沒有漏項，每一個圖層都有處置。</p>'}
     <p class="hint">請切回清單檢查差異欄與可信度。自動抓量的結果標記為 <code>auto</code> 並在可信度上扣分，必須人工抽查。</p>`);
+}
+
+/* ══════════ 投標價組成 ══════════ */
+
+/**
+ * 價格風險的預設三點估計，刻意不對稱。
+ * 使用者說真正吃虧的是「發包時報價比估價高」—— 向上的尾巴本來就比向下長。
+ */
+const PRICE_DIST = { min: -0.02, mode: 0, max: 0.08 };
+
+/**
+ * 直接成本 → 投標總價。
+ *
+ * 這個視窗存在的理由：清單右下角那個「預估金額」是**採購成本**，
+ * 旁邊原本沒有一個字說明它是什麼。拿它去投標，等於用 0% 間接費、
+ * 0% 利潤、0% 風險準備的價格投 —— 數字完全合理，只是少了三層。
+ */
+function openBid() {
+  const list = selectedItems().length ? selectedItems() : state.items;
+  const sum = Q.summarize(pricedAll(list), state.settings);
+  const st = state.settings;
+
+  // 風險準備金：從模擬推導，不是拍一個百分比
+  let sim = null, reserve = { amount: 0 };
+  try {
+    sim = R.simulatePortfolio(pricedAll(list), st);   // 開關就在 st.priceDist 本身
+    if (sim) reserve = BD.riskReserve(sim, st.reserveLevel);
+  } catch (e) { console.warn('模擬失敗', e); }
+
+  // 漏項保留：已知幾何量 × 同類工項均價
+  const sf = BD.shortfallReserve(state.missed, state.items);
+
+  const r = BD.buildUp(sum.cost, {
+    markups: st.markups, taxRate: st.taxRate,
+    reserve: reserve.amount, shortfall: sf.amount,
+  });
+  if (r.error) return dialog('無法組價', `<p>${esc(r.error)}</p>`);
+
+  const profit = (r.lines.find((x) => x.key === 'profit') || {}).amount || 0;
+  const be = BD.breakEvenDelayDays(r.total, profit, st.delayDailyRate);
+  const scen = BD.delayScenarios(r.total, profit, st.delayDailyRate, [7, 14, 30, 60]);
+
+  const money = (v) => `NT$ ${Q.fmt(v, 0)}`;
+  const rows = r.lines.map((x) => {
+    const basis = x.basis === 'price' ? `<span class="chip warn">佔標價 ${(x.rate * 100).toFixed(1)}%</span>`
+      : x.basis === 'cost' ? `<span class="chip">成本 ×${(x.rate * 100).toFixed(1)}%</span>` : '';
+    return `<tr><td>${esc(x.label)} ${basis}</td>
+      <td class="n hint">${x.base != null ? money(x.base) : ''}</td>
+      <td class="n"><b>${money(x.amount)}</b></td>
+      <td class="hint">${esc(x.note || '')}</td></tr>`;
+  }).join('');
+
+  dialog('投標價組成', `
+    <p class="chip warn" style="display:block;padding:9px 11px;white-space:normal">
+      清單上的「預估金額」是<b>採購成本</b>，不是承包價 ——
+      未稅、無管理費、無利潤、無風險準備。這個視窗補上中間那三層。</p>
+
+    <table class="mkt" style="margin:10px 0">
+      <thead><tr><th>項目</th><th class="n">計算基數</th><th class="n">金額</th><th>說明</th></tr></thead>
+      <tbody>${rows}
+        <tr style="border-top:2px solid var(--line)"><td><b>未稅標價</b></td><td></td>
+          <td class="n"><b>${money(r.preTax)}</b></td>
+          <td class="hint">為直接成本的 ${((r.markupOnDirect || 0) * 100).toFixed(1)}% 加成</td></tr>
+        <tr><td>營業稅 ${(r.taxRate * 100).toFixed(0)}%</td><td></td><td class="n">${money(r.tax)}</td><td></td></tr>
+        <tr class="on"><td><b>投標總價</b></td><td></td><td class="n"><b>${money(r.total)}</b></td><td></td></tr>
+      </tbody></table>
+
+    <p class="hint"><b>「佔標價」與「成本加成」是兩種不同的數學。</b>
+      規費是「佔合約價 1%」，必須用除的：P = 基數 ÷ (1 − 1%)。
+      用乘的（基數 × 1%）在 10 億的案子上會少算約 100 萬，而且帳面上看不出來。</p>
+
+    <h4 style="margin:14px 0 6px">風險準備金</h4>
+    ${reserve.error ? `<p class="chip warn" style="display:block;padding:8px 10px">${esc(reserve.error)}</p>`
+      : `<p>取 <b>${esc(reserve.atLabel || '')}</b>（${money(reserve.at)}）減 P50（${money(reserve.base)}）
+        ＝ <b>${money(reserve.amount)}</b>。</p>
+      <p class="hint">${esc(reserve.note || '')}</p>`}
+    <div class="fgrid" style="margin-top:8px">
+      <div><label class="f">準備金服務水準</label><select id="bLevel">
+        ${[['0.5', 'P50（不編列）'], ['0.8', 'P80'], ['0.9', 'P90'], ['0.95', 'P95']].map(([v, l]) =>
+          `<option value="${v}" ${String(st.reserveLevel) === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></div>
+      <div><label class="f">價格風險（發包時報價比估價高）</label><select id="bPrisk">
+        <option value="0" ${st.priceDist ? '' : 'selected'}>關閉（單價視為定值）</option>
+        <option value="1" ${st.priceDist ? 'selected' : ''}>開啟（−2% / 0 / +8%）</option>
+      </select></div>
+    </div>
+    ${st.priceDist ? '' : `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+      價格風險目前<b>關閉</b>，所以這個準備金只涵蓋<b>數量</b>會用超的風險。
+      你說真正吃虧的是「發包時報價比估價高」—— 那一段現在沒有被算進去。</p>`}
+
+    <h4 style="margin:14px 0 6px">漏項保留</h4>
+    ${sf.rows.length ? `<table class="mat"><thead><tr><th>圖層</th><th class="n">數量</th><th class="n">金額</th><th>依據</th></tr></thead>
+        <tbody>${sf.rows.map((x) => `<tr><td>${esc(x.layer)}</td>
+          <td class="n">${x.qty != null ? Q.fmt(x.qty, 2) + ' ' + esc(x.unit || '') : '—'}</td>
+          <td class="n">${x.amount ? money(x.amount) : '—'}</td>
+          <td class="hint">${esc(x.why)}</td></tr>`).join('')}</tbody></table>
+      <p class="hint" style="margin-top:6px">${esc(sf.note)}</p>`
+      : '<p class="hint">目前沒有被擋下的漏項。跑過「圖層自動抓量」之後，被擋下的圖層會在這裡估列金額。</p>'}
+
+    <h4 style="margin:14px 0 6px">逾期罰款（每日 ${(st.delayDailyRate * 1000).toFixed(1)}‰）</h4>
+    <table class="mat"><thead><tr><th class="n">延誤</th><th class="n">罰款</th><th>吃掉利潤</th></tr></thead>
+      <tbody>${scen.map((x) => `<tr class="${x.wipesOutProfit ? 'overdue' : ''}">
+        <td class="n">${x.days} 天</td><td class="n">${money(x.penalty)}</td>
+        <td>${x.profitEaten == null ? '—' : (x.profitEaten * 100).toFixed(1) + '%'}
+          ${x.wipesOutProfit ? '<span class="chip bad">已轉為虧損</span>' : ''}</td></tr>`).join('')}</tbody></table>
+    ${be ? `<p class="hint" style="margin-top:6px"><b>延誤 ${be} 天，罰款就吃光全部利潤。</b>
+      這是情境不是預測 —— 工具算得出要徑與浮時，但算不出你會不會延誤。</p>` : ''}
+
+    <h4 style="margin:14px 0 6px">加成費率</h4>
+    <div class="fgrid">
+      ${st.markups.map((m, i) => `<div><label class="f">${esc(m.label)}（${m.basis === 'price' ? '佔標價' : '成本加成'}）</label>
+        <input type="number" step="0.1" min="0" data-mk="${i}" value="${(m.rate * 100).toFixed(2)}"></div>`).join('')}
+    </div>
+    <p class="hint" style="margin-top:8px">這些費率是<b>你們的商業決定</b>，工具不會替你決定。
+      它能做的是把直接成本算準，並把每一層攤開來看得見。</p>`,
+    [{ label: '關閉' }, { label: '匯出 Excel', fn: () => exportBid(r, reserve, sf, scen, be) }],
+    (body, gen) => {
+      const reopen = () => { dlgClose(gen); setTimeout(openBid, 60); };
+      body.querySelector('#bLevel').onchange = (e) => {
+        st.reserveLevel = parseFloat(e.target.value); persist(); reopen();
+      };
+      body.querySelector('#bPrisk').onchange = (e) => {
+        st.priceDist = e.target.value === '1' ? { ...PRICE_DIST } : null;
+        persist(); reopen();
+      };
+      body.querySelectorAll('[data-mk]').forEach((el) => {
+        el.onchange = () => {
+          const v = parseFloat(el.value);
+          if (Number.isFinite(v) && v >= 0) { st.markups[+el.dataset.mk].rate = v / 100; persist(); reopen(); }
+        };
+      });
+    });
+}
+
+/** 投標價組成匯出 —— 三張工作表：組成、漏項、延誤情境。 */
+function exportBid(r, reserve, sf, scen, be) {
+  const comp = [['項目', '基礎', '費率', '計算基數', '金額']];
+  for (const x of r.lines) {
+    comp.push([x.label, x.basis === 'price' ? '佔標價' : x.basis === 'cost' ? '成本加成' : '—',
+      x.rate != null ? x.rate : '', x.base != null ? x.base : '', x.amount]);
+  }
+  comp.push([], ['未稅標價', '', '', '', r.preTax], [`營業稅 ${(r.taxRate * 100).toFixed(0)}%`, '', '', '', r.tax],
+    ['投標總價', '', '', '', r.total], [],
+    ['風險準備金依據', reserve.error || `${reserve.atLabel} ${reserve.at} − P50 ${reserve.base}`],
+    ['損益兩平延誤天數', be == null ? '無法計算' : be]);
+  const sheets = [{ name: '投標價組成', rows: comp }];
+  if (sf.rows.length) {
+    sheets.push({ name: '漏項保留', rows: [['圖層', '數量', '單位', '同類均價', '金額', '依據'],
+      ...sf.rows.map((x) => [x.layer, x.qty ?? '', x.unit || '', x.avgPrice ?? '', x.amount, x.why])] });
+  }
+  sheets.push({ name: '延誤情境', rows: [['延誤天數', '罰款', '吃掉利潤比例', '是否轉虧'],
+    ...scen.map((x) => [x.days, x.penalty, x.profitEaten ?? '', x.wipesOutProfit ? '是' : '否'])] });
+  exportExcel('投標價組成', sheets);
 }
 
 /* ══════════ 重複描繪 ══════════ */
@@ -1802,12 +1970,27 @@ function openLayers() {
           const m = matches[i];
           const sel = $(`#dlgBody [data-map="${i}"]`);
           const code = sel && !sel.disabled ? sel.value : '';
+          // 幾何量本身是算得出來的 —— 算不出來的只是「該算到哪個工項」。
+          // 所以漏項保留不是憑空估，是「已知數量 × 同類均價」。
+          const cand = m.ambiguous.length ? m.ambiguous : (m.top ? [m.top] : []);
+          const refItem = cand.length ? state.itemByCode.get(cand[0]) : null;
+          const qtyOf = (dedup) => {
+            const src = { ...g };
+            // 重複描繪的圖層改用聯集長度：總長本來就灌了水，
+            // 拿灌水的數字去估保留會二次高估
+            if (dedup) { const dg = dupOf(g.layer); if (dg && dg.union > 0) src.length = dg.union; }
+            // 判斷不出是哪個工項，就判斷不出該取長度、面積還是個數 ——
+            // 硬給一個「長度」會讓圖塊層冒出 0.2 M 這種對計數工項毫無意義的數字
+            return refItem ? layerValueFor(refItem, src, toM) : null;
+          };
           if (dupBad(g.layer)) {
-            return missed.push({ layer: g.layer, why: `重複描繪：${DD.describe(dupOf(g.layer), toM)}`, level: 'bad' });
+            return missed.push({ layer: g.layer, why: `重複描繪：${DD.describe(dupOf(g.layer), toM)}`, level: 'bad',
+              qty: qtyOf(true), unit: refItem ? refItem.unit : '', candidates: cand, wbs: refItem ? refItem.wbs : null });
           }
           if (m.ambiguous.length) {
             return missed.push({ layer: g.layer,
-              why: `無法分辨：${m.ambiguous.map(nameOf).join(' / ')} 幾何上看不出差別`, level: 'bad' });
+              why: `無法分辨：${m.ambiguous.map(nameOf).join(' / ')} 幾何上看不出差別`, level: 'bad',
+              qty: qtyOf(false), unit: refItem ? refItem.unit : '', candidates: cand, wbs: refItem ? refItem.wbs : null });
           }
           if (!code) {
             if (m.band === 'blocked') return missed.push({ layer: g.layer, why: m.reasons.join('；'), level: 'warn' });
@@ -1828,6 +2011,8 @@ function openLayers() {
           it.provenance = { kind: 'dxf-layer', drawing: state.drawing ? state.drawing.name : '', layer: g.layer, at: new Date().toISOString() };
           n++;
         });
+        // 漏項要接成金額保留 —— 在總價裡歸零是系統性低估，比估得不準危險
+        state.missed = missed.map((x) => ({ ...x }));
         renderAll(); persist();
         setTimeout(() => openTakeoffReport(n, missed), 60);
       },
@@ -3772,4 +3957,4 @@ function exportRfiCsv() {
 }
 
 // 供 e2e 測試觀察內部狀態
-window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
+window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet };
