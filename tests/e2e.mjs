@@ -1760,7 +1760,9 @@ ok('按鈕名稱直接寫明範圍（全部工項 / 已勾選）',
   menuTxt.includes('全部工項') && menuTxt.includes('跨所有圖面') && menuTxt.includes('已勾選'), menuTxt.slice(0, 120));
 ok('選單明說「這是 BOM 工項清單，不是某一張圖的清單」',
   menuTxt.includes('不是「某一張圖的清單」'), menuTxt.slice(0, 400));
-ok('並告訴使用者要單張圖該怎麼做', menuTxt.includes('請先在清單上勾選'), menuTxt.slice(0, 500));
+ok('單張圖有專屬的匯出路徑，不用自己勾選',
+  menuTxt.includes('依圖紙') && menuTxt.includes('目前載入的這張圖'), menuTxt.slice(0, 500));
+ok('說明「依圖紙」是以數量的出處分表', menuTxt.includes('數量的出處是哪一張圖'), menuTxt.slice(0, 700));
 
 // 匯出後的範圍摘要
 await page.locator('#eAll').click();
@@ -1897,6 +1899,96 @@ await page.evaluate((keep) => {
   }
   window.__takeoff.renderAll();
 }, sheetBefore);
+
+console.log('\n【7之十四】依圖紙分組的 BOM，與單張圖匯出 Excel');
+await page.locator('#tabList').click();
+await page.waitForTimeout(150);
+const shBefore = await page.evaluate(() => {
+  const T = window.__takeoff, s = T.state;
+  const keep = {};
+  const set = (code, drawing) => {
+    const it = s.itemByCode.get(code);
+    keep[code] = { p: it.provenance || null, q: it.qty.drawing };
+    it.qty.drawing = 100;
+    it.provenance = { kind: 'dxf-layer', drawing, layer: 'E-CABLE', measurements: [], at: '' };
+  };
+  set('321.01', 'A0-1_電氣平面圖.dwg');
+  set('321.02', 'A0-1_電氣平面圖.dwg');
+  set('322.01', 'M-02_空調平面圖.dwg');
+  keep.__sel = [...s.selected];
+  s.selected = new Set();
+  s.activeNode = null; s.search = ''; s.onlyIssues = false;
+  T.renderAll();
+  return keep;
+});
+
+await page.locator('#grpMode [data-grp="sheet"]').click();
+await page.waitForTimeout(200);
+const grpTxt = await page.locator('#boqBody').innerText();
+ok('依圖紙分組後，群組標題是圖號 + 圖檔名',
+  /A0-1/.test(grpTxt) && grpTxt.includes('A0-1_電氣平面圖.dwg'), grpTxt.slice(0, 200));
+ok('每一組標出工項數', /A0-1[\s\S]{0,80}2 項/.test(grpTxt), grpTxt.slice(0, 260));
+ok('沒有圖面量的工項另外歸成一組，不會被藏起來',
+  grpTxt.includes('未連結圖面'), grpTxt.slice(0, 400));
+ok('每一組都有「匯出這張圖」', await page.locator('#boqBody [data-sheetx]').count() >= 2,
+  String(await page.locator('#boqBody [data-sheetx]').count()));
+
+// 這是我自己寫壞又抓回來的那個 bug：renderTable 重排了列，
+// 但 shift 連選另外叫 visibleItems()，順序不同 → 選到別的工項，而且看起來很正常
+const ordCheck = await page.evaluate(() => {
+  const T = window.__takeoff;
+  const rows = [...document.querySelectorAll('#boqBody tr[data-code]')];
+  const byIdx = rows.map((r) => ({ idx: +r.dataset.idx, code: r.dataset.code }));
+  const ord = T.orderedVisible().list;
+  return byIdx.every((r) => ord[r.idx] && ord[r.idx].code === r.code);
+});
+ok('畫面上的 data-idx 與 shift 連選用的順序一致（不然會選到別的工項）', ordCheck);
+
+// 單張圖匯出
+const shDl = page.waitForEvent('download');
+await page.locator('#boqBody [data-sheetx="A0-1_電氣平面圖.dwg"]').click();
+await page.waitForTimeout(600);
+const shXl = readXlsx(await readFile(await (await shDl).path()));
+ok('單張圖匯出的檔名用圖號', /BOM-A0-1/.test((await shDl).suggestedFilename()),
+  (await shDl).suggestedFilename());
+ok('只含這張圖的工項，不含別張圖的',
+  shXl.text.includes('321.01') && shXl.text.includes('321.02') && !shXl.text.includes('322.01'));
+ok('圖號欄有填', shXl.text.includes('A0-1'));
+await closeDialog(page, 4);
+
+// 依圖紙：一張圖一張工作表
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+const bsDl = page.waitForEvent('download');
+await page.locator('#eSheets').click();
+await page.waitForTimeout(700);
+const bsXl = readXlsx(await readFile(await (await bsDl).path()));
+// 期望值從程式自己算 —— 前面的段落也在別的圖上留了出處，
+// 寫死「2 張」只會測到我對測試資料的記憶，不是測到行為
+const nDraw = await page.evaluate(() =>
+  window.__takeoff.groupByDrawing(window.__takeoff.state.items).filter((g) => !g.none).length);
+ok('依圖紙匯出：有幾張圖就有幾張工作表', bsXl.sheets.length === nDraw,
+  `${bsXl.sheets.length} vs ${nDraw}｜${bsXl.sheets.map((x) => x.name).join('|')}`);
+ok('工作表以圖號命名（有圖號的用圖號）', bsXl.sheets.some((x) => x.name === 'A0-1'),
+  bsXl.sheets.map((x) => x.name).join('|'));
+ok('沒有圖號的圖用檔名當表名，不會失敗',
+  bsXl.sheets.every((x) => x.name && x.name.length > 0), bsXl.sheets.map((x) => x.name).join('|'));
+ok('每張表的抬頭寫明圖號與圖檔', bsXl.text.includes('圖檔') && bsXl.text.includes('A0-1_電氣平面圖.dwg'));
+await closeDialog(page, 4);
+
+// 還原
+await page.evaluate((keep) => {
+  const T = window.__takeoff, s = T.state;
+  s.groupBy = 'wbs';
+  document.querySelector('#grpMode [data-grp="wbs"]').click();
+  for (const [code, v] of Object.entries(keep)) {
+    if (code.startsWith('__')) continue;
+    const it = s.itemByCode.get(code);
+    it.provenance = v.p; it.qty.drawing = v.q;
+  }
+  s.selected = new Set(keep.__sel || []);
+  T.renderAll();
+}, shBefore);
 
 console.log('\n【7之十三】左右欄收合，把空間讓給中間的 BOM 清單');
 const midW0 = await page.evaluate(() => document.querySelector('#colMid').getBoundingClientRect().width);

@@ -78,6 +78,7 @@ const state = {
   dupe: null,          // 重複描繪分析。重複描繪會靜默把數量翻倍，比任何自動化都優先
   drawingSigs: {},     // 圖名 → 內容簽章。同名不同簽章 = 這張圖改版了
   sheetNos: {},        // 圖名 → 人工指定的圖號（A0-1）。人工填的優先，不會被自動解析蓋掉
+  groupBy: 'wbs',      // BOM 清單的分組：'wbs' 或 'sheet'（依圖紙）
   measureStore: {},    // 量測依「哪張圖的哪一頁」分開存，換圖不會互相污染
   measureKey: '',      // 目前顯示的是哪一組量測
 };
@@ -113,6 +114,7 @@ async function init() {
   wire();
   applyColState();
   switchRightTab('cart');
+  $$('#grpMode [data-grp]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.grp === state.groupBy)));
   state.viewer = new Viewer($('#cv'));
   bindViewer(state.viewer);
   renderAll();
@@ -197,6 +199,7 @@ function persist() {
       tasks: state.tasks, seqStart: state.seqStart, priceBase: state.priceBase,
       drawingSigs: state.drawingSigs,
       sheetNos: state.sheetNos,
+      groupBy: state.groupBy,
       vendors: state.vendors, pos: state.pos,
       // 文字保留上限，避免塞爆 localStorage；超過的部分不存，重新載入文件即可還原
       docs: state.docs.map((d) => ({
@@ -232,6 +235,7 @@ function restore() {
     state.priceBase = d.priceBase || null;
     state.drawingSigs = d.drawingSigs || {};
     state.sheetNos = d.sheetNos || {};
+    state.groupBy = d.groupBy === 'sheet' ? 'sheet' : 'wbs';
     state.vendors = d.vendors || [];
     state.pos = d.pos || [];
   } catch (e) { console.warn('狀態還原失敗，改用範本預設值', e); }
@@ -305,6 +309,108 @@ function visibleItems() {
   return list;
 }
 
+/**
+ * 把工項依「出自哪一張圖」分組。
+ *
+ * 分組鍵用**檔名**而不是圖號：圖號可能還沒填、也可能兩張圖被填成同一個，
+ * 而檔名在一次專案裡是穩定且唯一的。圖號只拿來當顯示標籤。
+ *
+ * 沒有圖面量、或有圖面量但沒記出處的，一律歸到最後一組。
+ * 這一組不能省略 —— 那是「這份清單裡有多少東西根本不是從圖上來的」，
+ * 而那正是稽核第一個會問的問題。
+ */
+function groupByDrawing(items) {
+  const map = new Map();
+  const none = [];
+  for (const it of items) {
+    const d = (it.provenance && it.provenance.drawing) || '';
+    if (!d || !Q.isNum(it.qty && it.qty.drawing)) { none.push(it); continue; }
+    if (!map.has(d)) map.set(d, []);
+    map.get(d).push(it);
+  }
+  const groups = [...map.entries()]
+    .map(([name, list]) => ({ key: name, name, sheetNo: sheetNoFor(name), items: list }))
+    .sort((a, b) => String(a.sheetNo || '\uffff' + a.name).localeCompare(String(b.sheetNo || '\uffff' + b.name), 'zh-Hant'));
+  if (none.length) groups.push({ key: '', name: '', sheetNo: null, items: none, none: true });
+  return groups;
+}
+
+/**
+ * 畫面上真正的列順序（含依圖紙分組時的重排）。
+ *
+ * renderTable 的 `data-idx` 與 shift 連選都必須走這一個函式。
+ * 一開始我讓 renderTable 自己重排、rangeSelect 另外叫 visibleItems()，
+ * 結果是依圖紙分組時 shift 連選會選到**別的工項** —— 而且看起來很正常，
+ * 因為選到的也是清單上的東西，只是不是你框的那幾筆。
+ */
+/**
+ * 只匯出一張圖的工項。
+ *
+ * 使用者要的是「每一張圖紙產生 BOM 的清單資訊，並可彙出至 EXCEL」——
+ * 原本只能匯出整個專案，或先手動勾選。這裡直接以「出處是這張圖」為範圍，
+ * 不用勾、不會漏、也不會多。
+ */
+function exportSheet(drawing) {
+  const items = state.items.filter((it) =>
+    it.provenance && it.provenance.drawing === drawing && Q.isNum(it.qty && it.qty.drawing));
+  if (!items.length) return dialog('這張圖沒有工項', '<p>這張圖目前沒有產生任何圖面量。</p>');
+  const no = sheetNoFor(drawing);
+  const base = no || drawing.replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  exportExcel(`BOM-${base}`, [{ name: no || '工程量清單', rows: [CSV_HEAD, ...items.map(itemRow)] }],
+    { scope: exportScope(items, `圖面《${no ? `${no} ${drawing}` : drawing}》產生的工項`) });
+}
+
+/**
+ * 每一張圖各一張工作表，彙成一個活頁簿。
+ * 不是每張圖各下載一個檔：瀏覽器對連續多次下載本來就會擋，
+ * 而且要核對的時候分成十幾個檔只會更難核。
+ */
+function exportBySheet() {
+  const groups = groupByDrawing(state.items).filter((g) => !g.none);
+  if (!groups.length) return dialog('沒有圖面量', '<p>目前沒有任何工項的數量是從圖上量出來的。</p>');
+  const sheets = groups.map((g) => ({
+    name: g.sheetNo || g.name.replace(/\.[A-Za-z0-9]{1,5}$/, ''),
+    rows: [
+      ['圖號', g.sheetNo || '（未設圖號）'],
+      ['圖檔', g.name],
+      ['工項數', g.items.length],
+      [],
+      CSV_HEAD, ...g.items.map(itemRow),
+    ],
+  }));
+  const all = groups.flatMap((g) => g.items);
+  exportExcel('BOM-依圖紙', sheets, { scope: exportScope(all, `${groups.length} 張圖各一張工作表`) });
+}
+
+function orderedVisible() {
+  const list = visibleItems();
+  if (state.groupBy !== 'sheet') return { list, headAt: null };
+  const out = [], headAt = new Map();
+  for (const g of groupByDrawing(list)) {
+    headAt.set(out.length, g);
+    // 組內仍照 WBS 排，工程人員看清單的順序感不要被打亂
+    out.push(...g.items.slice().sort((a, b) =>
+      String(a.wbs).localeCompare(String(b.wbs)) || String(a.code).localeCompare(String(b.code))));
+  }
+  return { list: out, headAt };
+}
+
+/** 依圖紙分組時的群組列：圖號、檔名、工項數，以及「只匯出這一張圖」。 */
+function sheetGroupRow(g) {
+  if (g.none) {
+    return `<tr class="grp"><td colspan="12"><div class="gh">
+      <span class="gn">未連結圖面 · 數量來自 BOQ／人工確認／計算式</span>
+      <span class="hint">${g.items.length} 項</span></div></td></tr>`;
+  }
+  const label = g.sheetNo ? `<b>${esc(g.sheetNo)}</b>　${esc(g.name)}`
+    : `<span class="chip warn">未設圖號</span>　${esc(g.name)}`;
+  return `<tr class="grp"><td colspan="12"><div class="gh">
+    <span class="gn">${label}</span>
+    <span class="hint">${g.items.length} 項</span>
+    <button class="btn sm" data-sheetx="${esc(g.key)}">匯出這張圖</button>
+  </div></td></tr>`;
+}
+
 function varianceCell(it) {
   const v = Q.variance(it.qty.drawing, it.qty.boq);
   if (!v) return '<span class="muted">—</span>';
@@ -318,13 +424,16 @@ function varianceCell(it) {
 
 function renderTable() {
   const body = $('#boqBody');
-  const list = visibleItems();
   const blockMap = state.analysis ? rfiBlockMap() : new Map();
   const blDiff = baselineDiffIndex();
   const rows = [];
   let lastWbs = null;
-  list.forEach((it, idx) => {
-    if (it.wbs !== lastWbs) {
+  const { list: ordered, headAt } = orderedVisible();
+  ordered.forEach((it, idx) => {
+    if (headAt) {
+      const g = headAt.get(idx);
+      if (g) rows.push(sheetGroupRow(g));
+    } else if (it.wbs !== lastWbs) {
       lastWbs = it.wbs;
       const n = state.nodeByCode.get(it.wbs);
       rows.push(`<tr class="grp"><td colspan="12">${esc(it.wbs)} · ${esc(n ? n.name : '未分類')}</td></tr>`);
@@ -368,7 +477,7 @@ function renderTable() {
     }
   });
   body.innerHTML = rows.join('') || '<tr><td colspan="12" class="hint" style="padding:22px;text-align:center">沒有符合條件的工項</td></tr>';
-  $('#midTitle').textContent = `工程量清單 (BOM) · ${list.length} 項`;
+  $('#midTitle').textContent = `工程量清單 (BOM) · ${ordered.length} 項`;
 }
 
 /* ══════════ 右欄：已選 + 採購包 ══════════ */
@@ -523,6 +632,7 @@ function wire() {
 
   // 中表
   $('#boqBody').addEventListener('click', (e) => {
+    const sx = e.target.closest('[data-sheetx]'); if (sx) return exportSheet(sx.dataset.sheetx);
     const ds = e.target.closest('[data-dist]'); if (ds) return openDistDialog(ds.dataset.dist);
     const s = e.target.closest('[data-src]'); if (s) return openSourceDialog(s.dataset.src);
     const b = e.target.closest('[data-basis]'); if (b) return openSourceDialog(b.dataset.basis);
@@ -702,6 +812,14 @@ function wire() {
     if (e.key === 'ArrowRight') { e.preventDefault(); toggleCol('R'); }
   });
 
+  // BOM 清單的分組方式
+  $('#grpMode').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-grp]'); if (!b) return;
+    state.groupBy = b.dataset.grp;
+    $$('#grpMode [data-grp]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    renderTable(); persist();
+  });
+
   // 專案層級的分析工具。放在右欄標題列，不論停在哪一個分頁都按得到 ——
   // 這四顆跟「勾了哪幾項」無關，鎖在「已選」分頁裡是錯的分類。
   $('#btnTools').onclick = openTools;
@@ -819,7 +937,9 @@ function switchRightTab(key) {
 }
 
 function rangeSelect(a, b, on) {
-  const list = visibleItems();
+  // 一定要用 orderedVisible()：data-idx 是依畫面上的順序給的，
+  // 依圖紙分組時那個順序跟 visibleItems() 不一樣
+  const { list } = orderedVisible();
   const [lo, hi] = a < b ? [a, b] : [b, a];
   for (let i = lo; i <= hi; i++) if (list[i]) on ? state.selected.add(list[i].code) : state.selected.delete(list[i].code);
 }
@@ -4145,6 +4265,8 @@ function openExport() {
   dialog('匯出', `
     <div style="display:grid;gap:8px">
       <button class="btn" id="eAll">本專案<b>全部工項</b> Excel（跨所有圖面）</button>
+      <button class="btn" id="eSheets"><b>依圖紙</b> Excel（一張圖一張工作表）</button>
+      <button class="btn" id="eCur">只匯出<b>目前載入的這張圖</b></button>
       <button class="btn" id="eSel">清單上<b>已勾選</b>的工項 Excel</button>
       <button class="btn" id="ePkg">所有採購包 RFQ Excel（一包一張工作表）</button>
       <button class="btn" id="eJson">專案 JSON（含來源與簽核紀錄）</button>
@@ -4153,13 +4275,20 @@ function openExport() {
     這裡匯出的是 <b>BOM 工項清單</b>，不是「某一張圖的清單」。
     工具的 BOM 橫跨整個專案，同一份清單裡的圖面量可能來自好幾張圖，
     也可能根本不是從圖上量的（BOQ／人工確認／計算式）。
-    <b>要匯出單張圖的工項，請先在清單上勾選那些工項，再用「已勾選」那一顆。</b>
+    要一張圖一張圖地看，用<b>「依圖紙」</b>那一顆 —— 它以「數量的出處是哪一張圖」分表，
+    不用自己勾。在「清單」分頁把分組切成<b>依圖紙</b>，每一組標題上也有「匯出這張圖」。
     每次匯出都會列出這一份的數量分別來自哪幾張圖。</p>
     <p class="hint" style="margin-top:10px">匯出的是 .xlsx，內部是 UTF-8 XML，Excel 不需要猜編碼，中文不會亂碼
     （CSV 沒有編碼欄位，繁中 Windows 會猜成 Big5，這是過去亂碼的來源）。
     匯出檔保留「判定規則、簽核人、確認理由、數量出處」四欄 —— 這四欄才是稽核時真正被問的東西。</p>`,
     [{ label: '關閉' }], (body, gen) => {
       body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部', '本專案 BOM 的全部工項'); dlgClose(gen); };
+      body.querySelector('#eSheets').onclick = () => { dlgClose(gen); setTimeout(exportBySheet, 60); };
+      body.querySelector('#eCur').onclick = () => {
+        dlgClose(gen);
+        setTimeout(() => state.drawing ? exportSheet(state.drawing.name)
+          : dialog('沒有載入圖面', '<p>先載入一張圖，再用這一顆。</p>'), 60);
+      };
       body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選', '清單上已勾選的工項'); dlgClose(gen); };
       body.querySelector('#ePkg').onclick = () => { exportAllPackages(); dlgClose(gen); };
       body.querySelector('#eJson').onclick = () => { exportProject(); dlgClose(gen); };
@@ -4779,4 +4908,5 @@ function exportRfiCsv() {
 window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, BD, VD, PO, VF, SH,
   runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet,
   sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope,
-  openBid, openPortfolioSim, openMarket, openVendors, openTools, switchRightTab, toggleCol };
+  openBid, openPortfolioSim, openMarket, openVendors, openTools, switchRightTab, toggleCol,
+  groupByDrawing, orderedVisible, exportSheet, exportBySheet };
