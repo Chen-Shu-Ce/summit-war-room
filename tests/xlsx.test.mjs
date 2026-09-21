@@ -258,3 +258,35 @@ test('toTsv 必須把欄位裡的 Tab 與換行處理掉 —— 否則貼上會�
 test('沒有工作表時要明確失敗，而不是寫出一個壞檔', () => {
   assert.throws(() => XL.build([]));
 });
+
+/* ══════════ 讀取（往返） ══════════ */
+
+test('自己寫出去的活頁簿，自己讀得回來', async () => {
+  const bytes = XL.build([
+    { name: '甲表', rows: [['代碼', '名稱', '數量'], ['A-1', '電纜 38mm²', 100], ['A-2', '導管', 50]] },
+    { name: '乙表', rows: [['合計'], [150]] },
+  ]);
+  const back = await XL.readWorkbook(bytes);
+  assert.equal(back.length, 2);
+  assert.equal(back[0].name, '甲表');
+  assert.equal(back[0].rows[1][1], '電纜 38mm²', '中文與上標字元要原樣回來');
+  assert.equal(back[0].rows[2][2], '50');
+  assert.equal(back[1].name, '乙表');
+});
+
+test('空白儲存格讀回來是空字串，不是 undefined', async () => {
+  const bytes = XL.build([{ name: 'S', rows: [['a', '', 'c'], ['', '', '']] }]);
+  const back = await XL.readWorkbook(bytes);
+  assert.equal(back[0].rows[0][1], '');
+  assert.equal(back[0].rows[0][2], 'c');
+});
+
+test('XML 特殊字元不會壞掉', async () => {
+  const bytes = XL.build([{ name: 'S', rows: [['<A & B> "引號" \'單引\'']] }]);
+  const back = await XL.readWorkbook(bytes);
+  assert.equal(back[0].rows[0][0], '<A & B> "引號" \'單引\'');
+});
+
+test('不是 ZIP 就明講，不會回一份空資料讓人以為讀成功了', async () => {
+  await assert.rejects(() => XL.readWorkbook(new Uint8Array([1, 2, 3, 4])), /ZIP／xlsx/);
+});

@@ -27,6 +27,7 @@ import * as VF from './verify.js';
 import * as XL from './xlsx.js';
 import * as SH from './sheet.js';
 import * as CO from './costing.js';
+import * as PC from './pcces.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -824,6 +825,8 @@ function wire() {
   // 專案層級的分析工具。放在右欄標題列，不論停在哪一個分頁都按得到 ——
   // 這四顆跟「勾了哪幾項」無關，鎖在「已選」分頁裡是錯的分類。
   $('#btnTools').onclick = openTools;
+  $('#btnImportPcces').onclick = () => $('#filePcces').click();
+  $('#filePcces').onchange = (e) => { const f = e.target.files[0]; if (f) importPcces(f); e.target.value = ''; };
 
   // 右欄分頁
   $('#rtabs').addEventListener('click', (e) => {
@@ -4130,6 +4133,24 @@ function exportScope(items, label) {
   };
 }
 
+/** PCCES 回填的摘要：改了幾項、沒動幾項，必須講清楚。 */
+function pccesHtml(p) {
+  if (!p) return '';
+  return `
+    <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0">
+      <div style="font-weight:700;margin-bottom:6px">回填結果</div>
+      <div class="totrow"><span>標單細項</span><b>${p.total} 項</b></div>
+      <div class="totrow"><span>本工具有圖面量、已回填</span><b>${p.filled} 項</b></div>
+      <div class="totrow"><span>其中與原標單數量<b>不同</b></span><b>${p.changed} 項</b></div>
+      <div class="totrow"><span>沒有圖面量、維持原值</span><b>${p.total - p.filled} 項</b></div>
+      <p class="hint" style="margin-top:8px">項次、細目碼、名稱、單位、單價<b>一個字都沒有改</b> ——
+      只換了數量，複價跟著重算。這樣才對得回原標單。</p>
+      ${p.changed ? `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        有 <b>${p.changed}</b> 項的數量與原標單不同。送出去之前請逐項確認差異原因 ——
+        是圖改了、是原標單算錯了、還是工具抓錯了。</p>` : ''}
+    </div>`;
+}
+
 /**
  * 造價匯出的驗算結果。
  *
@@ -4234,6 +4255,7 @@ function exportExcel(baseName, sheets, opts = {}) {
   const tsv = prepared.length === 1 ? XL.toTsv(prepared[0].rows) : '';
   dialog('匯出 Excel', `
     <p>已產生 <b>${esc(file)}</b>　${prepared.length} 張工作表、${total} 筆資料。</p>
+    ${pccesHtml(opts.pcces)}
     ${costingHtml(opts.costing)}
     ${scopeHtml(opts.scope)}
     <table class="mkt" style="margin:8px 0"><thead><tr><th>工作表</th><th class="n">筆數</th><th class="n">欄數</th></tr></thead>
@@ -4311,6 +4333,7 @@ function openExport() {
       <button class="btn" id="eSel">清單上<b>已勾選</b>的工項 Excel</button>
       <button class="btn" id="ePkg">所有採購包 RFQ Excel（一包一張工作表）</button>
       <button class="btn" id="eJson">專案 JSON（含來源與簽核紀錄）</button>
+      <button class="btn" id="ePcces">回填數量到 <b>PCCES 詳細價目表</b></button>
     </div>
     <p class="chip acc" style="display:block;padding:8px 10px;margin-top:10px;white-space:normal">
     這裡匯出的是 <b>BOM 工項清單</b>，不是「某一張圖的清單」。
@@ -4334,6 +4357,7 @@ function openExport() {
       body.querySelector('#eSel').onclick = () => { exportCsv(selectedItems(), 'BOQ-已選', '清單上已勾選的工項'); dlgClose(gen); };
       body.querySelector('#ePkg').onclick = () => { exportAllPackages(); dlgClose(gen); };
       body.querySelector('#eJson').onclick = () => { exportProject(); dlgClose(gen); };
+      body.querySelector('#ePcces').onclick = () => { dlgClose(gen); setTimeout(exportPcces, 60); };
     });
 }
 
@@ -4366,6 +4390,163 @@ function costRows(items) {
       settings: state.settings,
       note: p.basis.status === 'blocked' ? `已鎖定：${p.basis.rule}` : '',
     });
+  });
+}
+
+/**
+ * 匯入 PCCES 標單。
+ *
+ * 這是整個造價方向的入口。使用者一直說「工項編碼表沒有電子檔」——
+ * 其實那份表就在他們自己的 PCCES 標單裡：細目碼、工項名稱、單位、
+ * 單價分析的工料組成，一應俱全。所以不自己編一套碼，
+ * 而是把標單讀進來當骨架，算量掛上去，再照原格式吐回去。
+ */
+async function importPcces(file) {
+  let sheets;
+  try {
+    sheets = await XL.readWorkbook(await file.arrayBuffer());
+  } catch (e) {
+    return dialog('讀不開這個檔', `<p>${esc(e.message)}</p>
+      <p class="hint">需要的是 PCCES 匯出的 .xlsx（含「詳細價目表」工作表）。
+      .xls 舊格式與加密的檔案讀不了 —— 請在 Excel 另存成 .xlsx。</p>`);
+  }
+  const detail = sheets.find((x) => x.name.includes('詳細價目表'));
+  if (!detail) {
+    return dialog('找不到詳細價目表', `<p>這個活頁簿裡沒有「詳細價目表」工作表。</p>
+      <p class="hint">讀到的工作表：${esc(sheets.map((x) => x.name).join('、')) || '（無）'}</p>`);
+  }
+  const parsed = PC.parseDetail(detail.rows);
+  if (parsed.error) return dialog('詳細價目表解析失敗', `<p>${esc(parsed.error)}</p>`);
+  const sm = PC.summary(parsed);
+  const ua = sheets.find((x) => x.name.includes('單價分析'));
+  const analysis = ua ? PC.parseAnalysis(ua.rows) : [];
+  state.pcces = { file: file.name, parsed, summary: sm, analysis, at: new Date().toISOString() };
+  openPccesReport();
+}
+
+/** 匯入結果：先讓人看清楚讀到什麼、哪裡對不上，再決定要不要套用。 */
+function openPccesReport() {
+  const p = state.pcces;
+  if (!p) return;
+  const sm = p.summary;
+  const n = (v) => (typeof v === 'number' ? Math.round(v).toLocaleString('en-US') : v);
+  const split = p.analysis.map((a) => ({ a, s: PC.splitUnitPrice(a) }));
+  const complete = split.filter((x) => x.s.complete).length;
+  dialog('PCCES 標單匯入', `
+    <p class="hint">${esc(p.file)}</p>
+    <div class="totrow"><span>細項（有數量的工項）</span><b>${n(sm.leaves)} 項</b></div>
+    <div class="totrow"><span>其中帶官方細目碼</span><b>${n(sm.withCode)} 項</b>${sm.noCode ? `　<span class="chip warn">${n(sm.noCode)} 項無碼</span>` : ''}</div>
+    <div class="totrow"><span>已有單價</span><b>${n(sm.priced)} 項</b>${sm.unpriced ? `　<span class="chip warn">${n(sm.unpriced)} 項待詢價</span>` : ''}</div>
+    <div class="totrow"><span>細項複價合計</span><b>NT$ ${n(sm.total)}</b></div>
+    ${p.analysis.length ? `<div class="totrow"><span>單價分析表</span><b>${n(p.analysis.length)} 個工作項目</b>
+      ${complete === p.analysis.length ? '<span class="chip ok">工料可完全分成人／材／機</span>'
+        : `<span class="chip warn">${n(p.analysis.length - complete)} 項有分不出類別的工料</span>`}</div>` : ''}
+
+    <h4 style="margin:14px 0 6px">標單自身的驗算</h4>
+    ${sm.lineErrors.length ? `<p class="chip bad" style="display:block;padding:8px 10px;white-space:normal">
+      <b>${sm.lineErrors.length} 列的「單價 × 數量 ≠ 複價」</b>（1 元以內的取整不算）：<br>
+      ${sm.lineErrors.slice(0, 5).map((e) => `${esc(e.no)} ${esc(e.name.slice(0, 20))}：${n(e.qty)} × ${n(e.unitPrice)} = ${n(e.calc)}，但寫 ${n(e.declared)}`).join('<br>')}
+      </p>` : '<p class="chip ok" style="display:block;padding:8px 10px">每一列的單價 × 數量都等於複價。</p>'}
+    ${sm.rollupErrors.length ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+      <b>${sm.rollupErrors.length} 個標題層的金額與其子項總和對不上：</b><br>
+      ${sm.rollupErrors.slice(0, 5).map((e) => `${esc(e.no)} ${esc(e.name.slice(0, 20))}：宣告 ${n(e.declared)}，子項合計 ${n(e.sum)}，<b>差 ${n(e.diff)}</b>`).join('<br>')}
+      <br>這是標單本身的問題，不是讀取錯誤 —— 拿它當算量骨架之前要先釐清。</p>` : ''}
+
+    <h4 style="margin:14px 0 6px">套用之後會發生什麼</h4>
+    <p class="hint">工具的 WBS 會換成標單的項次階層，工項碼換成官方細目碼，單位與單價照抄。
+    <b>圖面量測與已抓好的量不會消失</b>，但會需要重新對應到新的工項碼 ——
+    因為舊的自訂碼（321.01 這種）與細目碼不是同一套東西，硬對會對錯。</p>
+    <p class="chip warn" style="display:block;padding:8px 10px;white-space:normal">
+    套用會覆蓋目前的工項清單。建議先用「匯出 → 專案 JSON」留一份。</p>`,
+    [{ label: '只看報告，不套用' },
+      { label: '匯出專案 JSON 備份', fn: () => setTimeout(exportProject, 60) },
+      { label: '套用為工項清單', primary: true, fn: () => setTimeout(applyPcces, 60) }]);
+}
+
+/** 把 PCCES 標單套成工具的 WBS 與工項。 */
+function applyPcces() {
+  const p = state.pcces;
+  if (!p) return;
+  const items = PC.leaves(p.parsed.items);
+  const grps = PC.groups(p.parsed.items);
+  const byNo = new Map(p.parsed.items.map((x) => [x.no, x]));
+  const anaByNo = new Map(p.analysis.map((a) => [a.no, a]));
+
+  state.nodes = grps.map((g) => ({
+    code: g.no, name: g.name, parent: g.parent && byNo.has(g.parent) ? g.parent : null, children: [], items: [],
+  }));
+  state.nodeByCode = new Map(state.nodes.map((x) => [x.code, x]));
+  for (const nd of state.nodes) {
+    if (nd.parent && state.nodeByCode.has(nd.parent)) state.nodeByCode.get(nd.parent).children.push(nd);
+  }
+
+  state.items = items.map((x) => {
+    const sp = anaByNo.has(x.no) ? PC.splitUnitPrice(anaByNo.get(x.no)) : null;
+    return {
+      code: x.no,                      // 項次才是標單上的識別，細目碼可能重複
+      pccesCode: x.code,               // 官方細目碼，原樣保留
+      pccesFlags: x.flags,
+      wbs: x.parent,
+      name: x.name, spec: '', unit: x.unit,
+      qty: { drawing: null, boq: x.qty, manual: null, vendor: null, history: null },
+      order: { unit: x.unit, unitFactor: 1, packMultiple: 1, moq: 0 },
+      unitPrice: x.unitPrice,
+      priceKind: sp && sp.complete ? 'split' : 'all-in',
+      matPrice: sp && sp.complete ? sp.material : null,
+      labPrice: sp && sp.complete ? sp.labor : null,
+      eqpPrice: sp && sp.complete ? sp.machine : null,
+      provenance: null,
+    };
+  });
+  state.itemByCode = new Map(state.items.map((x) => [x.code, x]));
+  for (const it of state.items) {
+    const nd = state.nodeByCode.get(it.wbs);
+    if (nd) nd.items.push(it);
+  }
+  state.selected = new Set();
+  state.expanded = new Set(state.nodes.filter((x) => !x.parent).map((x) => x.code));
+  state.activeNode = null;
+  state.baselines = []; state.prs = []; state.pos = []; state.packages = [];
+  renderAll(); persist();
+  const withSplit = state.items.filter((x) => x.priceKind === 'split').length;
+  dialog('已套用', `
+    <p>工項清單換成標單的 <b>${state.items.length}</b> 項，WBS 換成 <b>${state.nodes.length}</b> 層項次。</p>
+    <div class="totrow"><span>標單數量已填入「BOQ 量」</span><b>${state.items.filter((x) => Q.isNum(x.qty.boq)).length} 項</b></div>
+    <div class="totrow"><span>單價已拆成材料／人工／機具</span><b>${withSplit} 項</b></div>
+    <p class="hint" style="margin-top:8px">接下來：載入圖面 → 抓量 → 圖面量會與標單量並列比對，
+    差異超標的會被標出來。這正是你們對標單時在做的事。</p>
+    <p class="hint">採購包、基準版、請購單、發包單已清空 —— 它們綁的是舊的工項碼。</p>`);
+}
+
+/**
+ * 把算出來的量回填進 PCCES 詳細價目表。
+ *
+ * **只換數量**，項次、細目碼、名稱、單位一律照抄原檔 ——
+ * 那些是機關認的東西，工具沒有立場改；改了就對不上原標單，
+ * 而承辦人不會逐列比對，只會看到一份「看起來對」的檔案。
+ */
+function exportPcces() {
+  const p = state.pcces;
+  if (!p) {
+    return dialog('還沒有匯入 PCCES 標單', `<p>這一顆是把算出來的量<b>填回原標單的格式</b>，
+      所以要先有一份標單當骨架。</p>
+      <p class="hint">用工具列的「匯入 PCCES」載入你們的詳細價目表。</p>`);
+  }
+  // 只回填「有圖面量」的項目 —— 沒量到的維持標單原值，不動別人的數字
+  const qtyByNo = new Map();
+  let filled = 0, changed = 0;
+  for (const it of state.items) {
+    if (!Q.isNum(it.qty && it.qty.drawing)) continue;
+    const bq = CO.billQty(it, state.settings);
+    if (bq.qty == null) continue;
+    qtyByNo.set(it.code, bq.qty);
+    filled++;
+    const orig = (p.parsed.items.find((x) => x.no === it.code) || {}).qty;
+    if (Q.isNum(orig) && Math.abs(orig - bq.qty) > 1e-9) changed++;
+  }
+  const rows = PC.toDetailRows(p.parsed.items, qtyByNo);
+  exportExcel('PCCES-詳細價目表-回填', [{ name: '詳細價目表', rows }], {
+    pcces: { filled, changed, total: p.summary.leaves, file: p.file },
   });
 }
 
@@ -4998,4 +5179,5 @@ window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, 
   sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope,
   openBid, openPortfolioSim, openMarket, openVendors, openTools, switchRightTab, toggleCol,
   groupByDrawing, orderedVisible, exportSheet, exportBySheet,
-  CO, costRows, exportCosting, systemOf };
+  CO, costRows, exportCosting, systemOf,
+  PC, importPcces, applyPcces, exportPcces };

@@ -2113,6 +2113,96 @@ ok('基準版與請購單持久化', after.baselines === 1 && after.prs === 1, J
 ok('價格基準日持久化', await page.evaluate(() => !!window.__takeoff.state.priceBase));
 ok('工序持久化', after.tasks === 63, String(after.tasks));
 
+console.log('\n【7之十六】PCCES 標單匯入 → 算量 → 回填');
+// 合成一份 PCCES 詳細價目表（結構照真實檔案，但不含任何真實專案資料），
+// 用工具自己的 xlsx 寫出來再餵回去 —— 走的是使用者真正會走的那條路
+const pcFile = await page.evaluate(async () => {
+  const XL = window.__takeoff.PC && window.__takeoff;
+  const rows = [
+    ['某某公所', '', '', '', '', '', '', '', ''],
+    ['詳細價目表[標單]', '', '', '', '', '', '', '', ''],
+    ['工程名稱', '測試工程', '', '', '工程編號', 'TEST001', '', '', ''],
+    ['項 次', '項  目  及  說  明', '單 位', '數 量', '單 價', '複 價', '', '編碼(備註)', '權重比%'],
+    ['壹', '發包工程費', '', '', '', '', '', '', ''],
+    ['壹.一', '假設工程', '', '', '', '', '', '', ''],
+    ['壹.一.1', '施工圍籬，安全圍籬,甲種', 'M', '100', '1600', '160000', '', '015640000102a,#', ''],
+    ['', '(H=240cm含止水墩)', '', '', '', '0', '', ',*', ''],
+    ['壹.一.2', '臨時設施', '式', '1', '40000', '40000', '', '0151000004C1,#', ''],
+    ['壹.二', '結構工程', '', '', '', '', '', '', ''],
+    ['壹.二.1', '鋼筋，SD420W', 'T', '10', '30000', '300000', '', '0322000001S1,#', ''],
+  ];
+  const ana = [
+    ['單價分析表[預算]', '', '', '', '', ''],
+    ['壹.一.1', '工作項目：施工圍籬', '', '單位：M', '', '計價代碼：01564000010'],
+    ['', '工料名稱', '單位', '數量', '單價', '複價'],
+    ['', '圍籬材料', 'M', '1', '900', '900'],
+    ['', '模板工', '工', '0.5', '1400', '700'],
+  ];
+  // 用頁面自己的 xlsx 模組產生真正的 .xlsx 位元組
+  const mod = await import('./js/takeoff/xlsx.js');
+  const bytes = mod.build([{ name: '詳細價目表', rows }, { name: '單價分析表', rows: ana }]);
+  return Array.from(bytes);
+});
+await page.evaluate(async (bytes) => {
+  const u8 = new Uint8Array(bytes);
+  const f = new File([u8], 'pcces-test.xlsx',
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  await window.__takeoff.importPcces(f);
+}, pcFile);
+await page.waitForSelector('#dlg[open]');
+await page.waitForTimeout(400);
+const pcTxt = await page.locator('#dlgBody').innerText();
+ok('匯入報告出現', (await page.locator('#dlgTitle').innerText()).includes('PCCES'), pcTxt.slice(0, 80));
+ok('讀出 3 個細項', /3 項/.test(pcTxt), pcTxt.slice(0, 300));
+ok('細項複價合計 500,000', pcTxt.includes('500,000'), pcTxt.slice(0, 400));
+ok('標單自身的算術驗算過關', pcTxt.includes('每一列的單價 × 數量都等於複價'), pcTxt.slice(0, 600));
+ok('讀到單價分析表的工料組成', pcTxt.includes('單價分析表') && pcTxt.includes('人／材／機'), pcTxt.slice(0, 700));
+ok('明說套用會覆蓋目前清單', pcTxt.includes('覆蓋'), pcTxt.slice(0, 900));
+
+await page.locator('#dlgFoot button').filter({ hasText: '套用為工項清單' }).click();
+await page.waitForTimeout(500);
+const pcApplied = await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  const it = s.itemByCode.get('壹.一.1');
+  return {
+    items: s.items.length, nodes: s.nodes.length,
+    code: it && it.code, pcces: it && it.pccesCode, unit: it && it.unit,
+    boq: it && it.qty.boq, kind: it && it.priceKind,
+    mat: it && it.matPrice, lab: it && it.labPrice,
+  };
+});
+ok('工項換成標單的 3 項', pcApplied.items === 3, String(pcApplied.items));
+ok('WBS 換成標單的項次階層', pcApplied.nodes === 3, String(pcApplied.nodes));
+ok('工項碼用項次（標單上的識別）', pcApplied.code === '壹.一.1', String(pcApplied.code));
+ok('官方細目碼原樣保留', pcApplied.pcces === '015640000102a', String(pcApplied.pcces));
+ok('標單數量填進 BOQ 量', pcApplied.boq === 100, String(pcApplied.boq));
+ok('單價由單價分析表拆成材料／人工', pcApplied.kind === 'split' && pcApplied.mat === 900 && pcApplied.lab === 700,
+  JSON.stringify(pcApplied));
+
+// 算量 → 回填
+await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  const it = s.itemByCode.get('壹.一.1');
+  it.qty.drawing = 120;          // 圖上量到 120，標單寫 100
+  it.wasteRate = 0;
+  window.__takeoff.renderAll();
+});
+const bkDl = page.waitForEvent('download');
+await page.evaluate(() => window.__takeoff.exportPcces());
+await page.waitForTimeout(700);
+const bkXl = readXlsx(await readFile(await (await bkDl).path()));
+const bkTxt = await page.locator('#dlgBody').innerText();
+ok('回填摘要說明改了幾項', bkTxt.includes('回填結果') && bkTxt.includes('不同'), bkTxt.slice(0, 400));
+ok('明說細目碼一個字都沒改', bkTxt.includes('一個字都沒有改'), bkTxt.slice(0, 600));
+ok('回填檔保留官方細目碼', bkXl.text.includes('015640000102a'));
+ok('回填檔的數量換成圖面量 120', bkXl.text.includes('120'), bkXl.text.slice(0, 300));
+ok('複價跟著重算 192,000（120 × 1,600）', bkXl.text.includes('192000'), bkXl.text.slice(0, 400));
+ok('沒有圖面量的項目維持原值 300,000', bkXl.text.includes('300000'));
+await closeDialog(page, 4);
+
+// 這一段放在最後：applyPcces 會把工項清單整個換掉、並清空採購包與基準版，
+// 那正是前面段落在驗的東西。順序上不能放在它們前面。
+
 console.log('\n【9】無 JS 例外');
 ok('頁面無未捕捉錯誤', errors.length === 0, errors.slice(0, 3).join(' | '));
 

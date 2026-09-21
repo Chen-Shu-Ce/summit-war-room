@@ -234,3 +234,134 @@ export function toTsv(rows) {
     .map((v) => String(v ?? '').replace(/[\t\r\n]/g, ' '))
     .join('\t')).join('\n');
 }
+
+/* ══════════ 讀取 ══════════ */
+
+/**
+ * 解 ZIP。只處理 stored(0) 與 deflate(8) —— .xlsx 只會用這兩種。
+ *
+ * 解壓用瀏覽器內建的 DecompressionStream('deflate-raw')，不引第三方程式庫。
+ * Node 18+ 也有同一個 API，所以測試跑得動。
+ */
+export async function unzip(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  // 從尾端找中央目錄結束標記（EOCD）。註解最長 65535，所以只掃末段。
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('不是有效的 ZIP／xlsx 檔（找不到中央目錄）');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = new Map();
+  const dec = new TextDecoder('utf-8');
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const csize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const cmtLen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nameLen));
+    // 本地檔頭的 extra 長度可能與中央目錄不同，必須從本地檔頭讀
+    const lNameLen = dv.getUint16(lho + 26, true);
+    const lExtraLen = dv.getUint16(lho + 28, true);
+    const start = lho + 30 + lNameLen + lExtraLen;
+    out.set(name, { method, bytes: u8.subarray(start, start + csize) });
+    p += 46 + nameLen + extraLen + cmtLen;
+  }
+  const files = new Map();
+  for (const [name, e] of out) {
+    if (e.method === 0) { files.set(name, e.bytes); continue; }
+    if (e.method !== 8) continue;                       // 其他壓縮法不支援，略過而不是整份失敗
+    const ds = new DecompressionStream('deflate-raw');
+    const ab = await new Response(new Blob([e.bytes]).stream().pipeThrough(ds)).arrayBuffer();
+    files.set(name, new Uint8Array(ab));
+  }
+  return files;
+}
+
+const XTEXT = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)).replace(/&amp;/g, '&');
+
+/** A1 → [欄, 列]（0 起算）。 */
+function refToRC(ref) {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref);
+  if (!m) return null;
+  let c = 0;
+  for (const ch of m[1]) c = c * 26 + ch.charCodeAt(0) - 64;
+  return [c - 1, +m[2] - 1];
+}
+
+/**
+ * 讀 .xlsx → [{ name, rows }]。
+ *
+ * 用規則式掃描而不是 DOM 解析：Node 沒有 DOMParser，而 Excel 產出的
+ * 工作表 XML 結構非常規律（`<c r="A1" t="s"><v>5</v></c>`），掃得住。
+ * 代價是不處理奇形怪狀的 XML —— 真的遇到就會少讀幾格，不會整份爆掉。
+ */
+export async function readWorkbook(buf) {
+  const files = await unzip(buf);
+  const dec = new TextDecoder('utf-8');
+  const text = (n) => (files.has(n) ? dec.decode(files.get(n)) : '');
+
+  const shared = [];
+  const ss = text('xl/sharedStrings.xml');
+  if (ss) {
+    for (const m of ss.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+      shared.push([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((x) => XTEXT(x[1])).join(''));
+    }
+  }
+
+  const rels = new Map();
+  for (const m of text('xl/_rels/workbook.xml.rels').matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+    rels.set(m[1], m[2]);
+  }
+  const sheets = [];
+  for (const m of text('xl/workbook.xml').matchAll(/<sheet\b([^>]*)\/?>/g)) {
+    const name = /name="([^"]*)"/.exec(m[1]);
+    const rid = /r:id="([^"]*)"/.exec(m[1]);
+    if (!name || !rid) continue;
+    let tgt = rels.get(rid[1]) || '';
+    tgt = tgt.replace(/^\/?xl\//, '').replace(/^\//, '');
+    const path = `xl/${tgt}`;
+    if (!files.has(path)) continue;
+    sheets.push({ name: XTEXT(name[1]), rows: parseSheet(dec.decode(files.get(path)), shared) });
+  }
+  return sheets;
+}
+
+function parseSheet(xml, shared) {
+  const cells = new Map();
+  let maxR = -1, maxC = -1;
+  for (const m of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    const attrs = m[1], body = m[2] || '';
+    const ref = /r="([A-Z]+\d+)"/.exec(attrs);
+    if (!ref) continue;
+    const rc = refToRC(ref[1]);
+    if (!rc) continue;
+    const t = /t="([^"]*)"/.exec(attrs);
+    let val = '';
+    if (t && t[1] === 'inlineStr') {
+      val = [...body.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((x) => XTEXT(x[1])).join('');
+    } else {
+      const v = /<v>([\s\S]*?)<\/v>/.exec(body);
+      if (v) {
+        val = t && t[1] === 's' ? (shared[+v[1]] ?? '') : XTEXT(v[1]);
+      }
+    }
+    if (val === '') continue;
+    cells.set(`${rc[1]}:${rc[0]}`, val);
+    if (rc[1] > maxR) maxR = rc[1];
+    if (rc[0] > maxC) maxC = rc[0];
+  }
+  const rows = [];
+  for (let r = 0; r <= maxR; r++) {
+    const row = [];
+    for (let c = 0; c <= maxC; c++) row.push(cells.get(`${r}:${c}`) ?? '');
+    rows.push(row);
+  }
+  return rows;
+}
