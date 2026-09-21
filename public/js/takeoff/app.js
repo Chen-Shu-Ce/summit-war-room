@@ -26,6 +26,7 @@ import * as PO from './po.js';
 import * as VF from './verify.js';
 import * as XL from './xlsx.js';
 import * as SH from './sheet.js';
+import * as CO from './costing.js';
 
 const LS_KEY = 'summit.takeoff.v1';
 const $ = (s, r = document) => r.querySelector(s);
@@ -4129,6 +4130,44 @@ function exportScope(items, label) {
   };
 }
 
+/**
+ * 造價匯出的驗算結果。
+ *
+ * 最重要的一行是 C 類那一行：**不可估的項目沒有被加進總價**。
+ * 只給一個總價而不說「另有 N 項不可估」，會讓人以為那就是全部 ——
+ * 而投標時那個誤會的代價是整個案子。
+ */
+function costingHtml(sm) {
+  if (!sm) return '';
+  const c = sm.counts;
+  const n = (v) => v.toLocaleString('en-US');
+  return `
+    <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0">
+      <div style="font-weight:700;margin-bottom:6px">造價驗算</div>
+      <div class="totrow"><span>正式總價（<b>不含</b> C 類）</span><b>NT$ ${n(Math.round(sm.total))}</b></div>
+      <table class="mat" style="margin-top:8px">
+        <thead><tr><th>分類</th><th>意義</th><th class="n">項數</th></tr></thead><tbody>
+        <tr><td><b>A</b></td><td>信心 90 以上，可直接納入</td><td class="n">${n(c.A)}</td></tr>
+        <tr><td><b>B</b></td><td>信心 50–89，可暫估但需人工確認</td><td class="n">${n(c.B)}</td></tr>
+        <tr><td><b>C</b></td><td>信心未達 50，<b>不可估</b>，需補圖或詢問設計單位</td><td class="n">${n(c.C)}</td></tr>
+        </tbody></table>
+      ${c.C ? `<p class="chip bad" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        <b>${n(c.C)} 項屬 C 類，金額沒有計入上面的總價。</b>
+        它們在「高風險項目」那張工作表裡，複價欄是空的。
+        投標前這 ${n(c.C)} 項必須補圖或向設計單位釐清 —— 現在把它當成 0 元投出去，
+        中標後就是自己吸收。</p>` : ''}
+      ${c.unpriced ? `<p class="chip warn" style="display:block;padding:8px 10px;margin-top:8px;white-space:normal">
+        <b>${n(c.unpriced)} 項沒有單價</b>（待詢價），複價留白，同樣不在總價裡。
+        見「待詢價項目」工作表。</p>` : ''}
+      ${c.needCheck ? `<p class="hint" style="margin-top:8px">${n(c.needCheck)} 項標記為「需人工確認」——
+        A 類以外的都要人看過才算數。</p>` : ''}
+      <p class="hint" style="margin-top:8px"><b>這份檔案不含計量規則與定額。</b>
+        計價數量是「圖面淨量 ×(1+損耗率) + 施工預留」，沒有套用模板扣除、鋼筋搭接
+        這類地區性計量規則；單價也不是定額分析出來的。
+        要當成正式標單前，這兩件事得由造價人員另外處理。</p>
+    </div>`;
+}
+
 /** 把範圍摘要畫成一段人話。 */
 function scopeHtml(sc) {
   if (!sc) return '';
@@ -4195,6 +4234,7 @@ function exportExcel(baseName, sheets, opts = {}) {
   const tsv = prepared.length === 1 ? XL.toTsv(prepared[0].rows) : '';
   dialog('匯出 Excel', `
     <p>已產生 <b>${esc(file)}</b>　${prepared.length} 張工作表、${total} 筆資料。</p>
+    ${costingHtml(opts.costing)}
     ${scopeHtml(opts.scope)}
     <table class="mkt" style="margin:8px 0"><thead><tr><th>工作表</th><th class="n">筆數</th><th class="n">欄數</th></tr></thead>
       <tbody>${prepared.map((x) => `<tr><td>${esc(x.name)}</td><td class="n">${x.rows.length - 1}</td>
@@ -4264,6 +4304,7 @@ const CSV_HEAD = ['WBS', '工項代碼', '名稱', '規格', '單位', '圖面�
 function openExport() {
   dialog('匯出', `
     <div style="display:grid;gap:8px">
+      <button class="btn primary" id="eCost"><b>造價 BOM</b>（22 欄 ＋ 5 張彙總表）</button>
       <button class="btn" id="eAll">本專案<b>全部工項</b> Excel（跨所有圖面）</button>
       <button class="btn" id="eSheets"><b>依圖紙</b> Excel（一張圖一張工作表）</button>
       <button class="btn" id="eCur">只匯出<b>目前載入的這張圖</b></button>
@@ -4282,6 +4323,7 @@ function openExport() {
     （CSV 沒有編碼欄位，繁中 Windows 會猜成 Big5，這是過去亂碼的來源）。
     匯出檔保留「判定規則、簽核人、確認理由、數量出處」四欄 —— 這四欄才是稽核時真正被問的東西。</p>`,
     [{ label: '關閉' }], (body, gen) => {
+      body.querySelector('#eCost').onclick = () => { dlgClose(gen); setTimeout(() => exportCosting(state.items, '本專案全部工項（造價用）'), 60); };
       body.querySelector('#eAll').onclick = () => { exportCsv(state.items, 'BOQ-全部', '本專案 BOM 的全部工項'); dlgClose(gen); };
       body.querySelector('#eSheets').onclick = () => { dlgClose(gen); setTimeout(exportBySheet, 60); };
       body.querySelector('#eCur').onclick = () => {
@@ -4293,6 +4335,52 @@ function openExport() {
       body.querySelector('#ePkg').onclick = () => { exportAllPackages(); dlgClose(gen); };
       body.querySelector('#eJson').onclick = () => { exportProject(); dlgClose(gen); };
     });
+}
+
+/**
+ * 系統別：由 WBS 最上層節點推得（100 土建、300 電氣…）。
+ * 推不到就是「未分類」—— 不猜。
+ */
+function systemOf(it) {
+  let n = state.nodeByCode.get(it.wbs);
+  while (n && n.parent && state.nodeByCode.get(n.parent)) n = state.nodeByCode.get(n.parent);
+  return n ? n.name : '';
+}
+
+/**
+ * 造價 BOM：使用者指定的 22 欄 + 5 張彙總表。
+ *
+ * 與「工程量清單」那一份的差別不是多幾欄，是**算的東西不一樣**：
+ * 這裡出的是計價數量（淨量 × 損耗 + 預留），那裡出的是採購數量
+ * （再套包裝倍數與 MOQ）。把採購量送進標單，等於把包裝進位報給業主。
+ */
+function costRows(items) {
+  return items.map((it, i) => {
+    const p = Q.suggestPurchase(priced(it), state.settings);
+    const c = Q.confidence(it, { settings: state.settings, basis: p.basis });
+    return CO.costRow(it, {
+      seq: i + 1,
+      score: c.score,
+      system: systemOf(it),
+      sheetNo: provSheet(it.provenance),
+      settings: state.settings,
+      note: p.basis.status === 'blocked' ? `已鎖定：${p.basis.rule}` : '',
+    });
+  });
+}
+
+function exportCosting(items, label) {
+  if (!items.length) return dialog('沒有資料', '<p>清單是空的。</p>');
+  const rows = costRows(items);
+  const sm = CO.summaries(rows);
+  exportExcel('造價BOM', [
+    { name: 'BOM 明細', rows: [CO.COST_HEAD, ...rows] },
+    { name: '系統別彙總', rows: CO.summaryRows('系統別', sm.bySystem) },
+    { name: '材料類別彙總', rows: CO.summaryRows('材質', sm.byMaterial) },
+    { name: '樓層區域彙總', rows: CO.summaryRows('樓層', sm.byFloor) },
+    { name: '高風險項目', rows: [CO.COST_HEAD, ...sm.highRisk] },
+    { name: '待詢價項目', rows: [CO.COST_HEAD, ...sm.unpriced] },
+  ], { scope: exportScope(items, label), costing: sm });
 }
 
 function exportCsv(items, name, scopeLabel) {
@@ -4909,4 +4997,5 @@ window.__takeoff = { state, Q, DXF, A, B, R, S, PR, CS, ENC, U, SV, PS, LM, DD, 
   runAnalysis, renderAll, runSchedule, loadMarket, openCalcSheet,
   sheetNoFor, provSheet, syncProvSheets, itemRow, CSV_HEAD, exportScope,
   openBid, openPortfolioSim, openMarket, openVendors, openTools, switchRightTab, toggleCol,
-  groupByDrawing, orderedVisible, exportSheet, exportBySheet };
+  groupByDrawing, orderedVisible, exportSheet, exportBySheet,
+  CO, costRows, exportCosting, systemOf };

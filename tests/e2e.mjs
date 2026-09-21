@@ -1900,6 +1900,74 @@ await page.evaluate((keep) => {
   window.__takeoff.renderAll();
 }, sheetBefore);
 
+console.log('\n【7之十五】造價 BOM：22 欄、5 張彙總表、C 類不入總價');
+await page.locator('#tabList').click();
+await page.waitForTimeout(150);
+// 造一個 C 類（信心低）且單價很高的工項 —— 它的金額絕對不可以進總價
+const costBefore = await page.evaluate(() => {
+  const s = window.__takeoff.state;
+  const keep = {};
+  for (const c of ['321.01', '410.01']) {
+    const it = s.itemByCode.get(c);
+    keep[c] = { q: JSON.parse(JSON.stringify(it.qty)), up: it.unitPrice, ov: it.basisOverride };
+  }
+  return keep;
+});
+
+await page.locator('#btnExport').click();
+await page.waitForSelector('#dlg[open]');
+const coDl = page.waitForEvent('download');
+await page.locator('#eCost').click();
+await page.waitForTimeout(900);
+const coXl = readXlsx(await readFile(await (await coDl).path()));
+ok('造價匯出有 6 張工作表（明細 + 5 張彙總）', coXl.sheets.length === 6,
+  coXl.sheets.map((x) => x.name).join('|'));
+for (const nm of ['BOM 明細', '系統別彙總', '材料類別彙總', '樓層區域彙總', '高風險項目', '待詢價項目']) {
+  ok(`有「${nm}」工作表`, coXl.sheets.some((x) => x.name === nm), coXl.sheets.map((x) => x.name).join('|'));
+}
+for (const col of ['系統別', '樓層', '區域', '材質', '計價數量', '材料單價', '人工單價', '複價',
+  '計算式', '信心分數', '風險等級', '是否需人工確認']) {
+  ok(`BOM 有「${col}」欄`, coXl.text.includes(col));
+}
+
+const coTxt = await page.locator('#dlgBody').innerText();
+ok('匯出視窗給出造價驗算', coTxt.includes('造價驗算'), coTxt.slice(0, 200));
+ok('總價明說不含 C 類', coTxt.includes('不含') && coTxt.includes('C 類'), coTxt.slice(0, 400));
+ok('明講這份檔案不含計量規則與定額 —— 不可以讓人以為可以直接當標單',
+  coTxt.includes('不含計量規則與定額'), coTxt.slice(0, 900));
+
+// 最重要的一條：C 類的金額不可以混進總價
+const cChk = await page.evaluate(() => {
+  const T = window.__takeoff;
+  const rows = T.costRows(T.state.items);
+  const sm = T.CO.summaries(rows);
+  const H = T.CO.COST_HEAD;
+  const amt = H.indexOf('複價'), note = H.indexOf('備註');
+  const cRows = rows.filter((r) => String(r[note]).includes('不計入正式總價'));
+  const sum = rows.filter((r) => !String(r[note]).includes('不計入正式總價'))
+    .reduce((a, r) => a + (typeof r[amt] === 'number' ? r[amt] : 0), 0);
+  return {
+    cCount: cRows.length,
+    cHaveMoney: cRows.filter((r) => typeof r[amt] === 'number').length,
+    total: Math.round(sm.total), recomputed: Math.round(sum),
+    cols: H.length,
+  };
+});
+ok('BOM 固定 22 欄', cChk.cols === 22, String(cChk.cols));
+ok('C 類一列都沒有金額', cChk.cHaveMoney === 0, `${cChk.cHaveMoney} 列 C 類帶著金額`);
+ok('總價 = 非 C 類的複價總和（重算一次對得上）', cChk.total === cChk.recomputed,
+  `${cChk.total} vs ${cChk.recomputed}`);
+await closeDialog(page, 4);
+
+await page.evaluate((keep) => {
+  const s = window.__takeoff.state;
+  for (const [c, v] of Object.entries(keep)) {
+    const it = s.itemByCode.get(c);
+    it.qty = v.q; it.unitPrice = v.up; it.basisOverride = v.ov;
+  }
+  window.__takeoff.renderAll();
+}, costBefore);
+
 console.log('\n【7之十四】依圖紙分組的 BOM，與單張圖匯出 Excel');
 await page.locator('#tabList').click();
 await page.waitForTimeout(150);
