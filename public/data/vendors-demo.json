@@ -1,0 +1,67 @@
+{
+  "_note": "示範資料，全部虛構。請用「廠商主檔 → 匯入」換成貴公司的真實資料後再使用。統編為填充值，非真實公司。",
+  "_fields": {
+    "categories": "承作的 WBS 大類代碼",
+    "leadDays": "標準前置期（日曆日）",
+    "capacity": "單月可承接金額（NT$）",
+    "onTimeRate": "歷史交期達成率 0–1",
+    "defectRate": "歷史不良率 0–1",
+    "priceIndex": "報價指數，1.00 = 市場行情，<1 較便宜",
+    "paymentDays": "帳期天數，越長對我方現金流越好",
+    "orders": "歷史合作筆數",
+    "certExpiry": "資格／證照有效期 YYYY-MM-DD，過期即否決",
+    "status": "active 合格 / probation 觀察中 / suspended 停權 / blacklisted 黑名單"
+  },
+  "vendors": [
+    {
+      "demo": true, "code": "DEMO-A", "name": "示範Ａ電材（虛構）", "taxId": "00000001",
+      "status": "active", "categories": ["310", "320", "321", "322", "323", "350"],
+      "leadDays": 30, "capacity": 8000000,
+      "onTimeRate": 0.96, "defectRate": 0.004, "priceIndex": 0.97, "paymentDays": 60, "orders": 24,
+      "certExpiry": "2027-06-30",
+      "contact": "（示範）", "phone": "02-0000-0001", "owner": "（示範）甲",
+      "address": "（示範地址）一號", "bankAccount": "000-0000001",
+      "note": "示範資料：電材大盤，品項齊、交期穩，報價略低於行情。"
+    },
+    {
+      "demo": true, "code": "DEMO-B", "name": "示範Ｂ電機（虛構）", "taxId": "00000002",
+      "status": "active", "categories": ["310", "320", "321", "331", "332", "340"],
+      "leadDays": 45, "capacity": 3000000,
+      "onTimeRate": 0.88, "defectRate": 0.012, "priceIndex": 1.03, "paymentDays": 45, "orders": 9,
+      "certExpiry": "2028-03-31",
+      "contact": "（示範）", "phone": "02-0000-0002", "owner": "（示範）乙",
+      "address": "（示範地址）二號", "bankAccount": "000-0000002",
+      "note": "示範資料：燈具與配電專長，產能中等。"
+    },
+    {
+      "demo": true, "code": "DEMO-C", "name": "示範Ｃ工程（虛構）", "taxId": "00000003",
+      "status": "probation", "categories": ["321", "323", "710"],
+      "leadDays": 21, "capacity": 1500000,
+      "onTimeRate": 0.74, "defectRate": 0.031, "priceIndex": 0.89, "paymentDays": 30, "orders": 4,
+      "certExpiry": "2027-01-31",
+      "contact": "（示範）", "phone": "02-0000-0003", "owner": "（示範）丙",
+      "address": "（示範地址）三號", "bankAccount": "000-0000003",
+      "note": "示範資料：報價最低但交期達成率偏低，列為觀察中。低價與低達成率同時出現，通常不是巧合。"
+    },
+    {
+      "demo": true, "code": "DEMO-D", "name": "示範Ｄ企業（虛構）", "taxId": "00000004",
+      "status": "active", "categories": ["321", "323"],
+      "leadDays": 25, "capacity": 2000000,
+      "onTimeRate": 0.9, "defectRate": 0.01, "priceIndex": 1.0, "paymentDays": 30, "orders": 2,
+      "certExpiry": "2027-12-31",
+      "contact": "（示範）", "phone": "02-0000-0003", "owner": "（示範）丙",
+      "address": "（示範地址）三號", "bankAccount": "000-0000003",
+      "note": "示範資料：刻意與 DEMO-C 共用電話、地址、負責人與匯款帳戶，用來示範關係人偵測 —— 這兩家若同時參與比價，比價結果沒有意義。"
+    },
+    {
+      "demo": true, "code": "DEMO-E", "name": "示範Ｅ材料（虛構）", "taxId": "00000005",
+      "status": "active", "categories": ["400", "500", "600"],
+      "leadDays": 60, "capacity": 6000000,
+      "onTimeRate": 0.93, "defectRate": 0.006, "priceIndex": 1.05, "paymentDays": 90, "orders": 15,
+      "certExpiry": "2020-12-31",
+      "contact": "（示範）", "phone": "02-0000-0005", "owner": "（示範）戊",
+      "address": "（示範地址）五號", "bankAccount": "000-0000005",
+      "note": "示範資料：證照已過期，用來示範「資格不符是否決，不是扣分」—— 分數再高都不會被建議。"
+    }
+  ]
+}

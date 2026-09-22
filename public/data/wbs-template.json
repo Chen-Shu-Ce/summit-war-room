@@ -1,0 +1,1423 @@
+{
+  "version": "2.0",
+  "name": "工程量清單範本（100–900 九大類編碼）",
+  "note": "階層採貴司自有編碼：100 土建／200 裝修／300 電氣／400 給排水／500 消防／600 空調／700 弱電／800 設備／900 其他。此為可編輯範本，非契約文件。 損耗區間為業界慣例值，非貴司實證資料；可由歷史實績校準取代。",
+  "settings": {
+    "currency": "TWD",
+    "defaultWasteRate": 0.03,
+    "varianceWarn": 0.05,
+    "varianceStop": 0.1,
+    "gateBand": "C",
+    "contractType": "remeasure",
+    "longLeadDays": 90,
+    "stochastic": true,
+    "simDist": "pert",
+    "simIterations": 10000,
+    "simSeed": 20260913,
+    "simCorrelation": 0.3,
+    "serviceLevel": 0.8
+  },
+  "nodes": [
+    {
+      "code": "100",
+      "name": "土建",
+      "parent": null
+    },
+    {
+      "code": "110",
+      "name": "假設工程",
+      "parent": "100"
+    },
+    {
+      "code": "120",
+      "name": "基礎",
+      "parent": "100"
+    },
+    {
+      "code": "130",
+      "name": "結構混凝土",
+      "parent": "100"
+    },
+    {
+      "code": "140",
+      "name": "鋼筋",
+      "parent": "100"
+    },
+    {
+      "code": "150",
+      "name": "模板",
+      "parent": "100"
+    },
+    {
+      "code": "160",
+      "name": "砌磚隔間",
+      "parent": "100"
+    },
+    {
+      "code": "200",
+      "name": "裝修",
+      "parent": null
+    },
+    {
+      "code": "210",
+      "name": "天花",
+      "parent": "200"
+    },
+    {
+      "code": "220",
+      "name": "牆面",
+      "parent": "200"
+    },
+    {
+      "code": "230",
+      "name": "地坪",
+      "parent": "200"
+    },
+    {
+      "code": "240",
+      "name": "門窗",
+      "parent": "200"
+    },
+    {
+      "code": "250",
+      "name": "塗裝",
+      "parent": "200"
+    },
+    {
+      "code": "300",
+      "name": "電氣",
+      "parent": null
+    },
+    {
+      "code": "310",
+      "name": "配電盤",
+      "parent": "300"
+    },
+    {
+      "code": "320",
+      "name": "幹線",
+      "parent": "300"
+    },
+    {
+      "code": "321",
+      "name": "電纜",
+      "parent": "320"
+    },
+    {
+      "code": "322",
+      "name": "電線",
+      "parent": "320"
+    },
+    {
+      "code": "323",
+      "name": "電纜架",
+      "parent": "320"
+    },
+    {
+      "code": "330",
+      "name": "照明",
+      "parent": "300"
+    },
+    {
+      "code": "331",
+      "name": "LED燈具",
+      "parent": "330"
+    },
+    {
+      "code": "332",
+      "name": "緊急照明",
+      "parent": "330"
+    },
+    {
+      "code": "333",
+      "name": "照明控制",
+      "parent": "330"
+    },
+    {
+      "code": "340",
+      "name": "插座",
+      "parent": "300"
+    },
+    {
+      "code": "350",
+      "name": "接地",
+      "parent": "300"
+    },
+    {
+      "code": "400",
+      "name": "給排水",
+      "parent": null
+    },
+    {
+      "code": "410",
+      "name": "給水",
+      "parent": "400"
+    },
+    {
+      "code": "420",
+      "name": "排水",
+      "parent": "400"
+    },
+    {
+      "code": "430",
+      "name": "污水",
+      "parent": "400"
+    },
+    {
+      "code": "440",
+      "name": "通氣",
+      "parent": "400"
+    },
+    {
+      "code": "450",
+      "name": "衛浴設備",
+      "parent": "400"
+    },
+    {
+      "code": "460",
+      "name": "泵浦水箱",
+      "parent": "400"
+    },
+    {
+      "code": "500",
+      "name": "消防",
+      "parent": null
+    },
+    {
+      "code": "510",
+      "name": "消防管路",
+      "parent": "500"
+    },
+    {
+      "code": "520",
+      "name": "撒水頭",
+      "parent": "500"
+    },
+    {
+      "code": "530",
+      "name": "火警偵測",
+      "parent": "500"
+    },
+    {
+      "code": "540",
+      "name": "滅火設備",
+      "parent": "500"
+    },
+    {
+      "code": "600",
+      "name": "空調",
+      "parent": null
+    },
+    {
+      "code": "610",
+      "name": "冰水主機",
+      "parent": "600"
+    },
+    {
+      "code": "620",
+      "name": "冰水管路",
+      "parent": "600"
+    },
+    {
+      "code": "630",
+      "name": "風管",
+      "parent": "600"
+    },
+    {
+      "code": "640",
+      "name": "空調箱風機",
+      "parent": "600"
+    },
+    {
+      "code": "650",
+      "name": "自動控制",
+      "parent": "600"
+    },
+    {
+      "code": "700",
+      "name": "弱電",
+      "parent": null
+    },
+    {
+      "code": "710",
+      "name": "通訊佈線",
+      "parent": "700"
+    },
+    {
+      "code": "720",
+      "name": "監視系統",
+      "parent": "700"
+    },
+    {
+      "code": "730",
+      "name": "門禁",
+      "parent": "700"
+    },
+    {
+      "code": "740",
+      "name": "廣播",
+      "parent": "700"
+    },
+    {
+      "code": "800",
+      "name": "設備",
+      "parent": null
+    },
+    {
+      "code": "810",
+      "name": "廚房設備",
+      "parent": "800"
+    },
+    {
+      "code": "820",
+      "name": "電梯",
+      "parent": "800"
+    },
+    {
+      "code": "830",
+      "name": "特殊設備",
+      "parent": "800"
+    },
+    {
+      "code": "900",
+      "name": "其他",
+      "parent": null
+    },
+    {
+      "code": "910",
+      "name": "測試調整平衡",
+      "parent": "900"
+    },
+    {
+      "code": "920",
+      "name": "保固備品",
+      "parent": "900"
+    }
+  ],
+  "items": [
+    {
+      "code": "321.01",
+      "wbs": "321",
+      "name": "低壓電力電纜 XLPE",
+      "spec": "600V 3C×38mm² CU/XLPE/PVC CNS 11174",
+      "unit": "M",
+      "qty": {
+        "drawing": 1710,
+        "boq": 1650,
+        "manual": 1700
+      },
+      "layerHints": [
+        "E-CABLE-PWR",
+        "E-PWR",
+        "電纜"
+      ],
+      "equipTag": "CB-38",
+      "manualNote": "現場複核：管路實走長度以 1,700M 為準（含彎曲補正）",
+      "manualBy": "電氣工程師 / 現場複核",
+      "wasteRate": 0.03,
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 780,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.03,
+        "max": 0.08
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 1.0214,
+          "note": "3C×38mm² × 8.96 g/cm³"
+        }
+      ]
+    },
+    {
+      "code": "321.02",
+      "wbs": "321",
+      "name": "低壓電力電纜 XLPE",
+      "spec": "600V 3C×22mm² CU/XLPE/PVC CNS 11174",
+      "unit": "M",
+      "qty": {
+        "drawing": 946,
+        "boq": 900
+      },
+      "layerHints": [
+        "E-CABLE-PWR"
+      ],
+      "equipTag": "CB-22",
+      "wasteRate": 0.03,
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 480,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.03,
+        "max": 0.08
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.5914,
+          "note": "3C×22mm² × 8.96 g/cm³"
+        }
+      ]
+    },
+    {
+      "code": "322.01",
+      "wbs": "322",
+      "name": "絕緣電線 PVC",
+      "spec": "600V 1C×5.5mm² CNS 679",
+      "unit": "M",
+      "qty": {
+        "drawing": 3200,
+        "boq": 3150
+      },
+      "layerHints": [
+        "E-WIRE"
+      ],
+      "wasteRate": 0.08,
+      "order": {
+        "unit": "捲",
+        "unitFactor": 200,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 32,
+      "leadTimeDays": 21,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.08,
+        "max": 0.15
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.0493,
+          "note": "1C×5.5mm² × 8.96 g/cm³"
+        }
+      ],
+      "priceNote": "單價由 1900 修正為 32。絕緣電線 5.5mm²：原填 1,900 應為 100M 整捲價。銅含量 0.0493 kg/M × NT$433.6/kg = NT$21.4/M，單價低於此即不可能 —— 由銅含量檢核抓出。"
+    },
+    {
+      "code": "350.01",
+      "wbs": "350",
+      "name": "接地線 PVC",
+      "spec": "600V 1C×22mm² 綠色",
+      "unit": "M",
+      "qty": {
+        "drawing": 412,
+        "boq": 500
+      },
+      "layerHints": [
+        "E-GND",
+        "接地"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "M",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 150,
+      "leadTimeDays": 30,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": false,
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.1971,
+          "note": "1C×22mm² × 8.96 g/cm³"
+        }
+      ]
+    },
+    {
+      "code": "320.01",
+      "wbs": "320",
+      "name": "厚金屬管 (RSC)",
+      "spec": "φ50mm 熱浸鍍鋅 CNS 3624",
+      "unit": "M",
+      "qty": {
+        "drawing": 1240,
+        "boq": 1220
+      },
+      "layerHints": [
+        "E-COND",
+        "配管"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "支",
+        "unitFactor": 3.66,
+        "packMultiple": 1,
+        "moq": 50
+      },
+      "unitPrice": 320,
+      "leadTimeDays": 21,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 3.2,
+          "note": "RSC φ50 熱浸鍍鋅厚管 ≈ 3.2 kg/M"
+        }
+      ]
+    },
+    {
+      "code": "323.01",
+      "wbs": "323",
+      "name": "電纜架 (Cable Tray)",
+      "spec": "梯型 600W×100H 熱浸鍍鋅 t=2.0mm",
+      "unit": "M",
+      "qty": {
+        "drawing": 386,
+        "boq": 360
+      },
+      "layerHints": [
+        "E-TRAY",
+        "線架"
+      ],
+      "wasteRate": 0.04,
+      "order": {
+        "unit": "節",
+        "unitFactor": 3.0,
+        "packMultiple": 1,
+        "moq": 20
+      },
+      "unitPrice": 2450,
+      "leadTimeDays": 35,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.04,
+        "max": 0.09
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 16.0,
+          "note": "展開寬 0.85m × t2.0mm × 7.85 + 橫桿約 20%"
+        }
+      ]
+    },
+    {
+      "code": "310.01",
+      "wbs": "310",
+      "name": "低壓配電盤 MCC",
+      "spec": "480V 3P4W 800A IP54 CNS 3990",
+      "unit": "台",
+      "qty": {
+        "drawing": 6,
+        "boq": 6,
+        "vendor": 6
+      },
+      "layerHints": [
+        "E-PANEL",
+        "MCC"
+      ],
+      "equipTag": "MCC",
+      "wasteRate": 0,
+      "order": {
+        "unit": "台",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 465000,
+      "leadTimeDays": 120,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "special": true,
+      "specialNote": "非標準盤體尺寸，需依現場機房淨空客製，交期 120 天為要徑",
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "estimate",
+          "kg": 100,
+          "note": "800A 銅匯流排與分歧概估 100 kg"
+        },
+        {
+          "index": "steel",
+          "grade": "estimate",
+          "kg": 250,
+          "note": "IP54 鋼製盤體概估 250 kg"
+        }
+      ]
+    },
+    {
+      "code": "331.01",
+      "wbs": "331",
+      "name": "LED 高天井燈",
+      "spec": "150W 5000K IP65 CNS 15630",
+      "unit": "只",
+      "qty": {
+        "drawing": 214,
+        "boq": 198
+      },
+      "layerHints": [
+        "E-LITE",
+        "照明"
+      ],
+      "equipTag": "HB",
+      "wasteRate": 0.02,
+      "order": {
+        "unit": "箱",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 3800,
+      "leadTimeDays": 40,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
+    },
+    {
+      "code": "332.01",
+      "wbs": "332",
+      "name": "緊急出口燈",
+      "spec": "LED 雙面 附電池 90min",
+      "unit": "只",
+      "qty": {
+        "drawing": 48,
+        "boq": 52
+      },
+      "layerHints": [
+        "E-EXIT"
+      ],
+      "equipTag": "EX",
+      "wasteRate": 0.02,
+      "order": {
+        "unit": "只",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 2100,
+      "leadTimeDays": 30,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
+    },
+    {
+      "code": "340.01",
+      "wbs": "340",
+      "name": "接地型插座",
+      "spec": "250V 20A 附蓋板",
+      "unit": "只",
+      "qty": {
+        "boq": 186
+      },
+      "layerHints": [
+        "E-RECP"
+      ],
+      "wasteRate": 0.02,
+      "order": {
+        "unit": "只",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 280,
+      "leadTimeDays": 14,
+      "measureType": "count",
+      "layerMapped": false,
+      "coverage": "none"
+    },
+    {
+      "code": "710.01",
+      "wbs": "710",
+      "name": "Cat.6A UTP 網路線",
+      "spec": "4P 23AWG LSZH TIA-568-C.2",
+      "unit": "M",
+      "qty": {
+        "drawing": 5820,
+        "boq": 5200,
+        "history": 5400
+      },
+      "layerHints": [
+        "T-DATA",
+        "弱電"
+      ],
+      "wasteRate": 0.08,
+      "order": {
+        "unit": "箱",
+        "unitFactor": 305,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 45,
+      "leadTimeDays": 25,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": false,
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.05,
+        "mode": 0.08,
+        "max": 0.18
+      },
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "direct",
+          "kg": 0.0185,
+          "note": "4P×23AWG(0.258mm²)×8 芯 × 8.96 g/cm³"
+        }
+      ],
+      "priceNote": "單價由 4200 修正為 45。Cat.6A 網路線：原填 4,200 應為 305M 整箱價。銅含量 0.0185 kg/M × NT$433.6/kg = NT$8.0/M。"
+    },
+    {
+      "code": "720.01",
+      "wbs": "720",
+      "name": "網路型攝影機",
+      "spec": "4MP 紅外線 IP67 PoE",
+      "unit": "台",
+      "qty": {
+        "drawing": 42,
+        "boq": 40
+      },
+      "layerHints": [
+        "T-CCTV"
+      ],
+      "equipTag": "CAM",
+      "wasteRate": 0,
+      "order": {
+        "unit": "台",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 8600,
+      "leadTimeDays": 45,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
+    },
+    {
+      "code": "410.01",
+      "wbs": "410",
+      "name": "不鏽鋼給水管",
+      "spec": "SUS304 φ50 Sch10 CNS 13392",
+      "unit": "M",
+      "qty": {
+        "drawing": 620,
+        "boq": 600
+      },
+      "layerHints": [
+        "P-DOMW",
+        "給水"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "支",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 1180,
+      "leadTimeDays": 30,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS304 含鎳約 8%，價格由鎳與鉻主導，與鋼筋盤元脫鉤。行情表無鎳指數。"
+        }
+      ]
+    },
+    {
+      "code": "420.01",
+      "wbs": "420",
+      "name": "PVC 排水管",
+      "spec": "A 級 φ100 CNS 1298",
+      "unit": "M",
+      "qty": {
+        "drawing": 480,
+        "boq": 520
+      },
+      "layerHints": [
+        "P-SANR",
+        "排水"
+      ],
+      "wasteRate": 0.06,
+      "order": {
+        "unit": "支",
+        "unitFactor": 4,
+        "packMultiple": 1,
+        "moq": 20
+      },
+      "unitPrice": 420,
+      "leadTimeDays": 14,
+      "measureType": "length",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.06,
+        "max": 0.14
+      },
+      "priceLink": [
+        {
+          "index": "pp",
+          "grade": "proxy",
+          "kg": 2.4,
+          "note": "PVC-A φ100 ≈ 2.4 kg/M。PP 指數代理 PVC 樹脂，原料不同，僅弱相關"
+        }
+      ]
+    },
+    {
+      "code": "450.01",
+      "wbs": "450",
+      "name": "單體馬桶",
+      "spec": "省水二段式 附緩降蓋",
+      "unit": "組",
+      "qty": {
+        "boq": 24,
+        "vendor": 24
+      },
+      "layerHints": [
+        "P-FIXT"
+      ],
+      "equipTag": "WC",
+      "wasteRate": 0,
+      "order": {
+        "unit": "組",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 9800,
+      "leadTimeDays": 35,
+      "measureType": "count",
+      "layerMapped": false,
+      "coverage": "none"
+    },
+    {
+      "code": "460.01",
+      "wbs": "460",
+      "name": "不鏽鋼水箱",
+      "spec": "SUS316 10CMD 附液位控制",
+      "unit": "座",
+      "qty": {
+        "drawing": 2,
+        "boq": 2
+      },
+      "layerHints": [
+        "P-TANK"
+      ],
+      "equipTag": "WT",
+      "wasteRate": 0,
+      "order": {
+        "unit": "座",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 380000,
+      "leadTimeDays": 95,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "special": true,
+      "specialNote": "SUS316 非標準庫存料，需訂製捲板，交期受鋼廠排程影響",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS316 另含鉬約 2%，較 304 更貴且走勢不同。行情表無鎳／鉬指數。"
+        }
+      ]
+    },
+    {
+      "code": "510.01",
+      "wbs": "510",
+      "name": "消防配管",
+      "spec": "黑鐵管 φ100 Sch40 附紅漆",
+      "unit": "M",
+      "qty": {
+        "drawing": 540,
+        "boq": 510
+      },
+      "layerHints": [
+        "F-PIPE",
+        "消防"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "支",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 980,
+      "leadTimeDays": 25,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 16.07,
+          "note": "黑鐵管 φ100 Sch40 = 16.07 kg/M（CNS 管重表）"
+        }
+      ]
+    },
+    {
+      "code": "520.01",
+      "wbs": "520",
+      "name": "密閉式撒水頭",
+      "spec": "68℃ 向上型 K80",
+      "unit": "只",
+      "qty": {
+        "drawing": 268,
+        "boq": 250
+      },
+      "layerHints": [
+        "F-SPKL"
+      ],
+      "equipTag": "SP",
+      "wasteRate": 0.02,
+      "order": {
+        "unit": "箱",
+        "unitFactor": 10,
+        "packMultiple": 1,
+        "moq": 5
+      },
+      "unitPrice": 320,
+      "leadTimeDays": 20,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
+    },
+    {
+      "code": "530.01",
+      "wbs": "530",
+      "name": "偵煙探測器",
+      "spec": "光電式 二線式",
+      "unit": "只",
+      "qty": {
+        "drawing": 132,
+        "boq": 132
+      },
+      "layerHints": [
+        "F-DETC"
+      ],
+      "equipTag": "SD",
+      "wasteRate": 0.02,
+      "order": {
+        "unit": "只",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 680,
+      "leadTimeDays": 20,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full"
+    },
+    {
+      "code": "620.01",
+      "wbs": "620",
+      "name": "冰水鋼管",
+      "spec": "SGP φ150 附保溫 50mm",
+      "unit": "M",
+      "qty": {
+        "drawing": 340,
+        "boq": 330
+      },
+      "layerHints": [
+        "M-CHWS",
+        "冰水"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "支",
+        "unitFactor": 6,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 3600,
+      "leadTimeDays": 45,
+      "measureType": "length",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.11
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 20.2,
+          "note": "SGP 150A = 20.2 kg/M（JIS G3452）"
+        }
+      ]
+    },
+    {
+      "code": "630.01",
+      "wbs": "630",
+      "name": "鍍鋅鐵板風管",
+      "spec": "低壓 t=0.8mm 含吊架 SMACNA",
+      "unit": "M2",
+      "qty": {
+        "drawing": 1860,
+        "boq": 1740
+      },
+      "layerHints": [
+        "M-DUCT",
+        "風管"
+      ],
+      "wasteRate": 0.12,
+      "order": {
+        "unit": "M2",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 1450,
+      "leadTimeDays": 35,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.08,
+        "mode": 0.12,
+        "max": 0.22
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 7.85,
+          "note": "t0.8mm × 7850 = 6.28 kg/M² + 法蘭吊架約 25%"
+        }
+      ]
+    },
+    {
+      "code": "610.01",
+      "wbs": "610",
+      "name": "氣冷式冰水主機",
+      "spec": "250RT R-134a 變頻",
+      "unit": "台",
+      "qty": {
+        "boq": 2,
+        "vendor": 2
+      },
+      "layerHints": [
+        "M-CHLR"
+      ],
+      "equipTag": "CH",
+      "wasteRate": 0,
+      "order": {
+        "unit": "台",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 4200000,
+      "leadTimeDays": 180,
+      "measureType": "count",
+      "layerMapped": false,
+      "coverage": "none",
+      "special": true,
+      "specialNote": "進口機組，180 天交期為全案最長要徑，須最優先發包",
+      "priceLink": [
+        {
+          "index": "copper",
+          "grade": "estimate",
+          "kg": 1000,
+          "note": "250RT 氣冷式冷凝器與蒸發器銅管概估 1,000 kg"
+        },
+        {
+          "index": "aluminium",
+          "grade": "estimate",
+          "kg": 300,
+          "note": "冷凝器鋁鰭片概估 300 kg"
+        },
+        {
+          "index": "steel",
+          "grade": "estimate",
+          "kg": 1500,
+          "note": "機殼、框架、壓縮機鋼件概估 1,500 kg"
+        }
+      ]
+    },
+    {
+      "code": "130.01",
+      "wbs": "130",
+      "name": "結構混凝土",
+      "spec": "f'c=280 kgf/cm² 泵送 CNS 3090",
+      "unit": "M3",
+      "qty": {
+        "drawing": 2480,
+        "boq": 2450
+      },
+      "layerHints": [
+        "S-CONC",
+        "混凝土"
+      ],
+      "wasteRate": 0.03,
+      "order": {
+        "unit": "M3",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 3100,
+      "leadTimeDays": 7,
+      "measureType": "volume",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.01,
+        "mode": 0.03,
+        "max": 0.06
+      }
+    },
+    {
+      "code": "150.01",
+      "wbs": "150",
+      "name": "普通模板",
+      "spec": "含組立拆除 3 次周轉",
+      "unit": "M2",
+      "qty": {
+        "drawing": 9120,
+        "boq": 8800
+      },
+      "layerHints": [
+        "S-FORM",
+        "模板"
+      ],
+      "wasteRate": 0.05,
+      "order": {
+        "unit": "M2",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 620,
+      "leadTimeDays": 10,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "closed": false,
+      "layerMapped": true,
+      "coverage": "partial",
+      "wasteDist": {
+        "min": 0.03,
+        "mode": 0.05,
+        "max": 0.12
+      }
+    },
+    {
+      "code": "140.01",
+      "wbs": "140",
+      "name": "竹節鋼筋",
+      "spec": "SD420W #8 (D25) CNS 560",
+      "unit": "KG",
+      "qty": {
+        "drawing": 186400,
+        "boq": 182000
+      },
+      "layerHints": [
+        "S-REBAR",
+        "鋼筋"
+      ],
+      "wasteRate": 0.04,
+      "order": {
+        "unit": "噸",
+        "unitFactor": 1000,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 24.5,
+      "leadTimeDays": 21,
+      "measureType": "weight",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.02,
+        "mode": 0.04,
+        "max": 0.09
+      },
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "direct",
+          "kg": 1,
+          "note": "指數標的本身，每公斤用量為 1"
+        }
+      ]
+    },
+    {
+      "code": "210.01",
+      "wbs": "210",
+      "name": "礦纖天花板",
+      "spec": "600×600 T-Bar 含骨架",
+      "unit": "M2",
+      "qty": {
+        "drawing": 2140,
+        "boq": 2100
+      },
+      "layerHints": [
+        "A-CLNG",
+        "天花"
+      ],
+      "wasteRate": 0.07,
+      "order": {
+        "unit": "M2",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 780,
+      "leadTimeDays": 21,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.04,
+        "mode": 0.07,
+        "max": 0.15
+      }
+    },
+    {
+      "code": "230.01",
+      "wbs": "230",
+      "name": "抛光石英磚",
+      "spec": "800×800 含黏著劑",
+      "unit": "M2",
+      "qty": {
+        "drawing": 1680,
+        "boq": 1620
+      },
+      "layerHints": [
+        "A-FLOR",
+        "地坪"
+      ],
+      "wasteRate": 0.1,
+      "order": {
+        "unit": "箱",
+        "unitFactor": 1.28,
+        "packMultiple": 1,
+        "moq": 10
+      },
+      "unitPrice": 1250,
+      "leadTimeDays": 45,
+      "measureType": "area",
+      "drawingSource": "measure",
+      "calibration": "declared-scale",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "wasteDist": {
+        "min": 0.06,
+        "mode": 0.1,
+        "max": 0.2
+      }
+    },
+    {
+      "code": "240.01",
+      "wbs": "240",
+      "name": "防火門",
+      "spec": "甲種 1hr 900×2100 附閉門器",
+      "unit": "樘",
+      "qty": {
+        "drawing": 18,
+        "boq": 18
+      },
+      "layerHints": [
+        "A-DOOR"
+      ],
+      "equipTag": "FD",
+      "wasteRate": 0,
+      "order": {
+        "unit": "樘",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 18500,
+      "leadTimeDays": 50,
+      "measureType": "count",
+      "drawingSource": "auto",
+      "closed": true,
+      "layerMapped": true,
+      "coverage": "full",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "proxy",
+          "kg": 45,
+          "note": "甲種防火門 900×2100 門扇+門框鋼板約 45 kg"
+        }
+      ]
+    },
+    {
+      "code": "810.01",
+      "wbs": "810",
+      "name": "不鏽鋼工作檯",
+      "spec": "SUS304 2000×750×850",
+      "unit": "台",
+      "qty": {
+        "boq": 12
+      },
+      "layerHints": [
+        "K-EQUIP"
+      ],
+      "equipTag": "KT",
+      "wasteRate": 0,
+      "order": {
+        "unit": "台",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 32000,
+      "leadTimeDays": 40,
+      "measureType": "count",
+      "layerMapped": false,
+      "coverage": "none",
+      "priceLink": [
+        {
+          "index": "steel",
+          "grade": "none",
+          "note": "SUS304 板金件，同上。"
+        }
+      ]
+    },
+    {
+      "code": "910.01",
+      "wbs": "910",
+      "name": "空調系統測試調整平衡",
+      "spec": "TAB 含報告書",
+      "unit": "式",
+      "qty": {
+        "boq": 1
+      },
+      "layerHints": [],
+      "wasteRate": 0,
+      "order": {
+        "unit": "式",
+        "unitFactor": 1,
+        "packMultiple": 1,
+        "moq": 0
+      },
+      "unitPrice": 280000,
+      "leadTimeDays": 0,
+      "measureType": "lumpsum",
+      "layerMapped": false,
+      "coverage": "none"
+    }
+  ]
+}

@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WBS 階層式工程量清單選擇器 — Summit War Room</title>
+<meta name="description" content="讀 DWG／DXF／PDF 圖面，量測後直接在數量旁給出建議採購量；WBS 階層選取、多來源數量比較、可信度評分、一鍵轉採購 Package。">
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --line2:#eceff3;
+  --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8;
+  --accent:#1d4ed8; --accent-soft:#e8eeff;
+  --ok:#15803d; --ok-bg:#e7f6ec; --warn:#b45309; --warn-bg:#fdf3e3; --bad:#b91c1c; --bad-bg:#fdecec;
+  --paper:#ffffff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,"Roboto Mono","Noto Sans Mono CJK TC",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI","PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  --h-head:52px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0b1120; --panel:#111a2e; --line:#22304d; --line2:#1a2540;
+    --ink:#e8eefc; --ink2:#9fb0cc; --ink3:#64748b;
+    --accent:#60a5fa; --accent-soft:#16243f;
+    --ok:#4ade80; --ok-bg:#10261a; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2c1414;
+    --paper:#f8fafc;
+  }
+}
+/* 明確選了深色的宿主（例如 Artifact 檢視器在淺色系統上切成深色）：
+   只靠 prefers-color-scheme 接不到，必須另外再定義一次。 */
+:root[data-theme="dark"]{
+    --bg:#0b1120; --panel:#111a2e; --line:#22304d; --line2:#1a2540;
+    --ink:#e8eefc; --ink2:#9fb0cc; --ink3:#64748b;
+    --accent:#60a5fa; --accent-soft:#16243f;
+    --ok:#4ade80; --ok-bg:#10261a; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2c1414;
+    --paper:#f8fafc;
+}
+*{box-sizing:border-box}
+/* .chip 這類有 display 的 class 會蓋掉瀏覽器預設的 [hidden]{display:none}，
+   結果是 hidden 設了卻還看得見 —— 工具列上會一直掛著兩個空的小膠囊。
+   放在這裡用 !important 一次講死，之後任何 class 都不會再蓋掉它。 */
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);-webkit-text-size-adjust:100%}
+button,input,select,textarea{font:inherit;color:inherit}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+
+/* ── 版面 ── */
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh}
+header.top{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);min-height:var(--h-head);flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.brand small{display:block;font-weight:400;color:var(--ink3);font-size:11px;letter-spacing:0}
+.spacer{flex:1}
+.cols{flex:1;display:grid;grid-template-columns:var(--wL,262px) minmax(0,1fr) var(--wR,340px);min-height:0}
+/* 收合左右欄，把空間讓給中間的 BOM 清單。
+   中欄是 minmax(0,1fr)，所以兩側一縮它就自動撐開 —— 不需要另外算寬度。 */
+.cols.lc{--wL:30px}
+.cols.rc{--wR:30px}
+.col.mini>*:not(h2):not(.minilab){display:none}
+.col.mini>h2{padding:9px 0;justify-content:center;gap:0}
+.col.mini>h2>*:not(.colx){display:none}
+.minilab{display:none}
+.rpane{display:none;flex-direction:column;min-height:0;flex:1}
+.rpane.on{display:flex}
+#rtabs button{padding:4px 9px;font-size:12px}
+#grpMode button{padding:2px 8px;font-size:11.5px}
+/* 依圖紙分組時的群組列：圖號、檔名、工項數、匯出本圖 */
+.grp .gh{display:flex;align-items:center;gap:8px;width:100%}
+.grp .gh .gn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grp .gh .btn{flex:none}
+#rtabs span{font-family:var(--mono);color:var(--ink3)}
+#rtabs button[aria-pressed="true"] span{color:#fff}
+.dsec{margin:0;padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--ink2);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;background:var(--panel);
+  position:sticky;top:0;z-index:2}
+.dsec .chip{margin-left:auto}
+.col.mini>.minilab{display:block;writing-mode:vertical-rl;text-orientation:mixed;
+  padding:10px 0;font-size:11px;color:var(--ink3);letter-spacing:2px;white-space:nowrap;
+  cursor:pointer;user-select:none}
+.col.mini>.minilab:hover{color:var(--accent)}
+.colx{border:0;background:transparent;color:var(--ink3);cursor:pointer;padding:0 3px;
+  font-size:13px;line-height:1;flex:none;border-radius:4px}
+.colx:hover{color:var(--accent);background:var(--line2)}
+.col{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
+.col+.col{border-left:1px solid var(--line)}
+.col>h2{margin:0;padding:9px 12px;font-size:12px;font-weight:700;letter-spacing:.4px;color:var(--ink2);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;background:var(--panel);position:sticky;top:0;z-index:3}
+.col>h2 .chip{margin-left:auto}
+.scroll{overflow:auto;flex:1;min-height:0}
+
+/* ── 控制項 ── */
+button.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:5px 10px;cursor:pointer;white-space:nowrap}
+button.btn:hover{border-color:var(--accent);color:var(--accent)}
+button.btn[disabled]{opacity:.45;cursor:not-allowed}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn.primary:hover{filter:brightness(1.08);color:#fff}
+button.btn.sm{padding:2px 7px;font-size:12px;border-radius:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:5px 10px;cursor:pointer;color:var(--ink2)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+input[type=text],input[type=number],input[type=date],select,textarea{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 7px;width:100%;min-width:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+label.f{display:block;font-size:11px;color:var(--ink3);margin:0 0 2px}
+.chip{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 8px;font-size:11px;font-family:var(--mono);border:1px solid var(--line);color:var(--ink2)}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.acc{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.pay{display:block;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
+.sl{display:block;font-size:10.5px;color:var(--ink3);font-family:var(--mono)}
+.hist2{display:flex;align-items:flex-end;gap:1px;height:64px;margin:8px 0}
+.hist2 i{flex:1;background:var(--accent);opacity:.55;min-height:1px}
+.hist2 i.hl{opacity:1;background:var(--warn)}
+.pct{width:100%;border-collapse:collapse;font-size:12px}
+.pct th,.pct td{padding:3px 7px;border-bottom:1px solid var(--line2)}
+.pct td.n{font-family:var(--mono);text-align:right}
+.pct tr.on{background:var(--accent-soft);font-weight:700}
+.pay.ok{color:var(--ok)} .pay.info{color:var(--ink2)} .pay.warn{color:var(--warn)} .pay.bad{color:var(--bad)}
+.sugpkg{border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:8px;display:flex;gap:9px;align-items:flex-start}
+.sugpkg .g{flex:1;min-width:0}
+.muted{color:var(--ink3)}
+.hint{font-size:11px;color:var(--ink3)}
+
+/* ── 左：WBS 樹 ── */
+.treewrap{padding:6px 0}
+.node{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:default;border-radius:6px}
+.node:hover{background:var(--line2)}
+.node.active{background:var(--accent-soft)}
+.node .tw{width:16px;text-align:center;color:var(--ink3);cursor:pointer;user-select:none;flex:none}
+.node .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.node .code{font-family:var(--mono);color:var(--ink3);font-size:11px;flex:none}
+.node .cnt{font-family:var(--mono);font-size:11px;color:var(--ink3);flex:none}
+.node input[type=checkbox]{flex:none;margin:0}
+
+/* ── 中：表格 ── */
+.midbar{display:flex;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+table.boq{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px}
+table.boq th,table.boq td{padding:5px 8px;border-bottom:1px solid var(--line2);vertical-align:middle}
+table.boq thead th{position:sticky;top:0;background:var(--panel);z-index:2;text-align:left;font-size:11px;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+table.boq tbody tr:hover{background:var(--line2)}
+table.boq tbody tr.sel{background:var(--accent-soft)}
+table.boq tbody tr.blocked td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
+.grp td{background:var(--line2);font-weight:700;font-size:11.5px;color:var(--ink2);letter-spacing:.3px}
+.nm2{max-width:230px}
+.nm2 b{font-weight:600}
+.nm2 small{display:block;color:var(--ink3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cellin{width:64px}
+td.sug{font-weight:700}
+.srcbtn{border:0;background:transparent;padding:0;cursor:pointer;font:inherit;color:inherit;text-decoration:underline dotted var(--ink3);text-underline-offset:3px}
+.bandA{background:var(--ok-bg);color:var(--ok)}
+.bandB{background:var(--accent-soft);color:var(--accent)}
+.bandC{background:var(--warn-bg);color:var(--warn)}
+.bandD{background:var(--bad-bg);color:var(--bad)}
+
+/* ── 右：已選 / 採購包 ── */
+.cartitem{border-bottom:1px solid var(--line2);padding:7px 12px;display:flex;gap:8px;align-items:flex-start}
+.cartitem .g{flex:1;min-width:0}
+.cartitem b{font-weight:600}
+.pkg{border:1px solid var(--line);border-radius:9px;margin:8px 12px;overflow:hidden}
+.pkg>header{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--line2);font-size:12px}
+.pkg .body{padding:7px 9px;display:grid;gap:6px}
+.pkg .row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.totbar{border-top:1px solid var(--line);padding:9px 12px;display:grid;gap:5px;background:var(--panel)}
+.bl{border:1px solid var(--line);border-radius:9px;margin:8px 12px;overflow:hidden}
+.bl>header{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--line2);font-size:12px;flex-wrap:wrap}
+.bl .body{padding:7px 9px;font-size:12px;display:grid;gap:5px}
+.bl .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
+.dirty{color:var(--warn)}
+.difftbl{width:100%;border-collapse:collapse;font-size:12px}
+.difftbl th,.difftbl td{padding:3px 6px;border-bottom:1px solid var(--line2);text-align:left}
+.difftbl td.n{font-family:var(--mono);text-align:right}
+.dl{color:var(--ink3)} .dn{color:var(--ink)}
+td.blchg{color:var(--warn);font-size:11px;font-family:var(--mono)}
+.totrow{display:flex;justify-content:space-between;gap:8px}
+.totrow b{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── 圖面面板 ── */
+.viewwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.viewwrap.on{display:flex}
+.tablewrap{display:none;flex-direction:column;min-height:0;flex:1}
+.tablewrap.on{display:flex}
+.seqwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.seqwrap.on{display:flex}
+.scanwrap{display:none;flex-direction:column;min-height:0;flex:1}
+.scanwrap.on{display:flex}
+.scanhead{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.sech{font-size:12px;font-weight:700;letter-spacing:.4px;color:var(--ink2);margin:18px 0 7px;display:flex;align-items:center}
+.upbar{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.doclist{margin-top:9px;display:grid;gap:6px}
+.docrow{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 9px;flex-wrap:wrap}
+.docrow .dn{flex:1;min-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docrow select{width:auto;min-width:96px}
+.scopebox{display:flex;gap:8px;flex-wrap:wrap}
+.scopebox label{display:flex;gap:5px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 11px;cursor:pointer}
+.scopebox label.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.scopebox input{width:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:9px}
+.stat{border:1px solid var(--line);border-radius:10px;padding:9px 11px;cursor:pointer;background:var(--panel)}
+.stat:hover{border-color:var(--accent)}
+.stat .k{display:block;background:none;font-size:11px;color:var(--ink3);padding:0;margin-bottom:3px}
+.stat .v{font-family:var(--mono);font-size:21px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat .u{font-size:11px;color:var(--ink3);margin-left:3px}
+.stat.warn .v{color:var(--warn)} .stat.bad .v{color:var(--bad)} .stat.ok .v{color:var(--ok)}
+.bar{height:5px;border-radius:3px;background:var(--line2);margin-top:6px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent)}
+.stages{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.stage{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--ink3)}
+.stage.done{border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+.stage.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-bg)}
+.stage .arrow{color:var(--ink3)}
+.rfi{border:1px solid var(--line);border-left-width:3px;border-radius:9px;padding:8px 11px;margin-bottom:7px}
+.rfi.high{border-left-color:var(--bad)} .rfi.med{border-left-color:var(--warn)} .rfi.low{border-left-color:var(--ink3)}
+.rfi h4{margin:0 0 3px;font-size:13px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+/* 工序 */
+.tgrp{margin-bottom:10px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.tgrp>header{padding:6px 10px;background:var(--line2);font-size:12px;font-weight:700;display:flex;gap:8px;align-items:center}
+.trow{display:flex;gap:8px;align-items:center;padding:5px 10px;border-top:1px solid var(--line2);font-size:12.5px;flex-wrap:wrap}
+.trow:hover{background:var(--line2)}
+.trow .sq{font-family:var(--mono);color:var(--ink3);width:34px;flex:none}
+.trow .nm{flex:1;min-width:150px}
+.trow .dt{font-family:var(--mono);font-size:11.5px;color:var(--ink2);white-space:nowrap}
+.trow.crit{box-shadow:inset 3px 0 0 var(--bad)}
+.trow.blocked{background:var(--bad-bg)}
+table.seq{width:100%;border-collapse:separate;border-spacing:0;font-size:11.5px}
+table.seq th,table.seq td{padding:4px 6px;border-bottom:1px solid var(--line2);vertical-align:top;text-align:left}
+table.seq thead th{position:sticky;top:0;background:var(--panel);z-index:2;white-space:nowrap;font-size:11px;color:var(--ink2);border-bottom:1px solid var(--line)}
+table.seq td.mono{font-family:var(--mono)}
+.lanewrap{overflow-x:auto;border:1px solid var(--line);border-radius:9px}
+.lane{display:flex;align-items:stretch;border-top:1px solid var(--line2);min-height:34px}
+.lane:first-child{border-top:0}
+.lane .lname{width:88px;flex:none;padding:6px 8px;font-size:11.5px;font-weight:700;background:var(--line2);display:flex;align-items:center}
+.lane .track{position:relative;flex:1;min-width:760px;padding:5px 0}
+.bar{position:absolute;height:20px;border-radius:4px;background:var(--accent);color:#fff;font-size:10.5px;line-height:20px;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.bar.crit{background:var(--bad)}
+.bar.gate{background:var(--warn);color:#1a1200}
+.bar.sug{opacity:.62}
+.axis{display:flex;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--ink3)}
+.axis .lname{width:88px;flex:none;background:var(--line2)}
+.axis .track{flex:1;min-width:760px;position:relative;height:18px}
+.axis .tick{position:absolute;top:2px;border-left:1px solid var(--line);padding-left:3px}
+.mat{width:100%;border-collapse:collapse;font-size:12px}
+.mat th,.mat td{padding:4px 7px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
+.mat td.n{font-family:var(--mono)}
+.mat tr.overdue{background:var(--bad-bg)} .mat tr.urgent{background:var(--warn-bg)}
+.feas{border:1px solid var(--warn);background:var(--warn-bg);border-radius:8px;padding:10px 12px;margin-bottom:11px;line-height:1.65;font-size:13px}
+.feas.bad{border-color:var(--bad);background:var(--bad-bg)}
+.feas .btn{margin-left:6px;vertical-align:baseline}
+table.mkt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.mkt th,table.mkt td{padding:5px 8px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
+table.mkt td.n,table.mkt th.n{text-align:right;font-family:var(--mono)}
+table.mkt tr.none td{opacity:.72}
+.gbar{display:flex;height:14px;border-radius:4px;overflow:hidden;margin:8px 0 4px;background:var(--line2)}
+.gbar i{display:block;height:100%}
+.gkey{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;align-items:center}
+.gkey span{display:flex;gap:5px;align-items:center}
+.gkey i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.cu{background:#c2703d} .al{background:#8aa0b4} .st{background:#6b7280} .ppc{background:#7c8f5a}
+.unc{background:repeating-linear-gradient(45deg,var(--bad) 0 5px,transparent 5px 10px);border:1px solid var(--bad)}
+.fix{background:var(--line2)}
+.rfi.done{opacity:.62}
+.rfi .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+.rfi .meta{font-size:11px;color:var(--ink3);margin-top:4px}
+.rfi .ans{border-left:3px solid var(--ok);background:var(--ok-bg);border-radius:0 6px 6px 0;padding:5px 9px;margin-top:6px;font-size:12px}
+.hist{font-size:11px;color:var(--ink3);margin-top:5px}
+.hist li{margin:1px 0}
+.rfi p{margin:4px 0 0;font-size:12px;color:var(--ink2)}
+.rfi table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px}
+.rfi td{padding:2px 6px;border-top:1px solid var(--line2);vertical-align:top}
+.rfi td:first-child{color:var(--ink3);width:74px;white-space:nowrap}
+.rfi td:last-child{color:var(--ink3);width:150px;text-align:right}
+.toolbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);
+  /* 刻意 nowrap＋橫向捲動，不換行。
+     這一列換行會把畫布高度吃掉，而畫布尺寸會改變點擊的像素吸附誤差 ——
+     也就是說「工具列多一顆膠囊」會讓所有量測值出現肉眼看不出來的偏差。
+     這個坑已經踩過三次。改成不換行之後，之後再加幾顆膠囊都不會動到畫布。 */
+  flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.toolbar::-webkit-scrollbar{display:none}
+.toolbar>*{flex:none}
+.toolbar>.spacer{flex:1 0 auto}
+#cv{flex:1;min-height:220px;width:100%;display:block;background:var(--paper);touch-action:none}
+.viewfoot{display:flex;gap:10px;align-items:center;padding:5px 10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
+.mlist{max-height:150px;overflow:auto;border-top:1px solid var(--line)}
+.mrow{display:flex;gap:7px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line2);font-size:12px}
+.mrow .v{font-family:var(--mono);min-width:104px;text-align:right}
+.layerrow{display:flex;gap:7px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line2);font-size:12px}
+.layerrow .lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11.5px}
+
+/* ── 對話框 ── */
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--ink);max-width:min(680px,94vw);width:100%}
+dialog::backdrop{background:rgba(8,12,22,.5)}
+dialog h3{margin:0;padding:11px 15px;border-bottom:1px solid var(--line);font-size:14px}
+dialog .dbody{padding:14px 15px;max-height:70vh;overflow:auto}
+dialog footer{padding:10px 15px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+table.fac{width:100%;border-collapse:collapse;font-size:12px}
+table.fac td{padding:3px 6px;border-bottom:1px solid var(--line2)}
+table.fac td:last-child{text-align:right;font-family:var(--mono)}
+.pos{color:var(--ok)} .neg{color:var(--bad)}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:16px;text-align:center;color:var(--ink3)}
+.drop.hot{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.k{font-family:var(--mono);background:var(--line2);border-radius:4px;padding:0 4px}
+
+/* ── 窄螢幕 ── */
+.tabbar{display:none;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+@media (max-width:1100px){
+  /* 窄螢幕一次只顯示一欄，收合就沒有意義 —— 把欄寬變數整個蓋掉，
+     免得收合狀態殘留在設定裡、換到手機上看變成一條縫。 */
+  .cols,.cols.lc,.cols.rc{grid-template-columns:1fr}
+  .col.mini>*:not(h2){display:revert}
+  .col.mini>h2>*{display:revert}
+  .col.mini>.minilab{display:none}
+  .col{display:none}
+  .col.show{display:flex}
+  .col+.col{border-left:0}
+  .tabbar{display:flex}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">WBS 階層式工程量清單選擇器<small>Summit War Room · Quantity Takeoff → Procurement Package</small></div>
+    <div class="spacer"></div>
+    <button class="btn" id="btnImportDrawing">載入圖面 (DWG/DXF/PDF)</button>
+    <button class="btn" id="btnDrawReset">清除／更新圖面</button>
+    <button class="btn" id="btnImportPcces">匯入 PCCES</button>
+    <button class="btn" id="btnImportBoq">匯入 BOQ CSV</button>
+    <button class="btn" id="btnVerify">驗算</button>
+    <button class="btn" id="btnSettings">參數</button>
+    <button class="btn" id="btnExport">匯出</button>
+    <button class="btn" id="btnHelp">說明</button>
+  </header>
+
+  <div class="tabbar">
+    <div class="seg" role="tablist">
+      <button data-tab="0" aria-pressed="true">分類</button>
+      <button data-tab="1" aria-pressed="false">清單</button>
+      <button data-tab="2" aria-pressed="false">已選</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- 左：WBS -->
+    <section class="col show" id="colLeft">
+      <h2><button class="colx" data-col="L" title="收合左欄（Alt+←）">‹</button>WBS 分類<span class="chip" id="wbsCount">—</span></h2>
+      <div class="minilab" data-col="L" title="展開左欄">WBS 分類</div>
+      <div style="padding:7px 10px;border-bottom:1px solid var(--line)">
+        <input type="text" id="treeSearch" placeholder="搜尋分類／工項／規格…">
+      </div>
+      <div class="scroll"><div class="treewrap" id="tree"></div></div>
+      <div class="viewfoot">
+        <button class="btn sm" id="btnExpandAll">全部展開</button>
+        <button class="btn sm" id="btnCollapseAll">全部收合</button>
+      </div>
+    </section>
+
+    <!-- 中：BOM / 圖面 -->
+    <section class="col show" id="colMid">
+      <h2>
+        <span id="midTitle">工程量清單 (BOM)</span>
+        <div class="seg" style="margin-left:auto">
+          <button id="tabScan" aria-pressed="true">解析中心</button>
+          <button id="tabList" aria-pressed="false">清單</button>
+          <button id="tabView" aria-pressed="false">圖面量測</button>
+          <button id="tabSeq" aria-pressed="false">施工工序</button>
+        </div>
+      </h2>
+
+      <!-- 解析中心 -->
+      <div class="scanwrap on" id="scanWrap">
+        <div class="scroll" style="padding:14px 16px">
+          <div class="scanhead">
+            <div style="flex:1;min-width:200px">
+              <label class="f">Project</label>
+              <input type="text" id="projName" placeholder="專案名稱" value="未命名專案">
+            </div>
+            <div style="min-width:170px">
+              <label class="f">合約型態</label>
+              <select id="projContract"><option value="remeasure">實作實算</option><option value="lumpsum">總價承攬</option></select>
+            </div>
+          </div>
+
+          <h3 class="sech">上傳文件</h3>
+          <div class="upbar" id="upBar">
+            <button class="btn" data-up="drawing">＋ 圖說</button>
+            <button class="btn" data-up="spec">＋ 規範</button>
+            <button class="btn" data-up="boq">＋ BOQ</button>
+            <button class="btn" data-up="equipment">＋ 設備表</button>
+            <span class="hint">也可以直接把檔案拖進視窗</span>
+          </div>
+          <div id="docList" class="doclist"></div>
+
+          <h3 class="sech">分析範圍</h3>
+          <div id="scopeBox" class="scopebox"></div>
+
+          <div style="margin:14px 0 4px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+            <button class="btn primary" id="btnAnalyze">開始解析</button>
+            <span class="hint" id="analyzeHint">解析只用已載入文件的實際內容，不會替你猜任何數字。</span>
+          </div>
+
+          <div id="scanResult" hidden>
+            <h3 class="sech">解析結果</h3>
+            <div class="stats" id="stats"></div>
+            <h3 class="sech">流程階段</h3>
+            <div class="stages" id="stages"></div>
+            <h3 class="sech">RFI <span class="chip" id="rfiCount">0</span>
+              <span class="seg" id="rfiFilter" style="margin-left:10px">
+                <button data-rf="open" aria-pressed="true">未結案</button>
+                <button data-rf="overdue" aria-pressed="false">逾期</button>
+                <button data-rf="closed" aria-pressed="false">已結案</button>
+                <button data-rf="all" aria-pressed="false">全部</button>
+              </span>
+              <button class="btn sm" id="btnRfiCsv" style="margin-left:8px">匯出 RFI CSV</button></h3>
+            <div id="rfiList"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tablewrap" id="tableWrap">
+        <div class="midbar">
+          <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" id="selAll" style="width:auto"> 全選本頁</label>
+          <button class="btn sm" id="btnAddSel">加入已選</button>
+          <button class="btn sm" id="btnRmSel">移出已選</button>
+          <span class="spacer"></span>
+          <span class="hint">分組</span>
+          <div class="seg" id="grpMode">
+            <button data-grp="wbs" aria-pressed="true">依 WBS</button>
+            <button data-grp="sheet" aria-pressed="false">依圖紙</button>
+          </div>
+          <label style="display:flex;gap:5px;align-items:center" class="hint"><input type="checkbox" id="onlyIssues" style="width:auto"> 只看需複核／鎖定</label>
+        </div>
+        <div class="scroll">
+          <table class="boq" id="boq">
+            <thead><tr>
+              <th style="width:26px"></th>
+              <th>工項</th>
+              <th style="width:44px">單位</th>
+              <th class="num" style="width:82px">圖面量</th>
+              <th class="num" style="width:82px">BOQ量</th>
+              <th class="num" style="width:158px">差異 / 計價影響</th>
+              <th style="width:96px">正式採購基準</th>
+              <th style="width:74px">可信度</th>
+              <th class="num" style="width:92px">損耗率 %</th>
+              <th class="num" style="width:118px">建議採購量</th>
+              <th class="num" style="width:104px">下單量</th>
+              <th class="num" style="width:96px">預估金額</th>
+            </tr></thead>
+            <tbody id="boqBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 施工工序 -->
+      <div class="seqwrap" id="seqWrap">
+        <div class="toolbar">
+          <div class="seg" id="seqView">
+            <button data-sv="tree" aria-pressed="true">工序樹</button>
+            <button data-sv="table" aria-pressed="false">關聯表</button>
+            <button data-sv="lane" aria-pressed="false">泳道圖</button>
+            <button data-sv="mat" aria-pressed="false">材料需求日</button>
+          </div>
+          <label class="hint" style="display:flex;gap:5px;align-items:center">開工日
+            <input type="date" id="seqStart" style="width:150px"></label>
+          <button class="btn sm" id="btnSeqLoad">載入工序範本</button>
+          <button class="btn sm" id="btnSeqCsv">匯出</button>
+          <span class="spacer" style="flex:1"></span>
+          <span class="chip" id="seqStat">尚未載入工序</span>
+        </div>
+        <div class="scroll" id="seqBody" style="padding:12px 14px"></div>
+      </div>
+
+      <div class="viewwrap" id="viewWrap">
+        <div class="toolbar">
+          <div class="seg" id="tools">
+            <button data-tool="pan" aria-pressed="true">平移</button>
+            <button data-tool="length">長度</button>
+            <button data-tool="area">面積</button>
+            <button data-tool="rect">矩形</button>
+            <button data-tool="count">計數</button>
+            <button data-tool="angle">角度</button>
+            <button data-tool="calib">比例校正</button>
+          </div>
+          <button class="btn sm" id="btnFit">全覽</button>
+          <button class="btn sm" id="btnSnap" aria-pressed="true">吸附 S</button>
+          <button class="btn sm" id="btnOrtho" aria-pressed="false">正交 O</button>
+          <button class="btn sm" id="btnLayers">圖層／自動抓量</button>
+          <span class="spacer"></span>
+          <span class="chip" id="pageChip" hidden></span>
+          <button class="chip" id="calcChip" hidden title="查看圖面計算式的驗算結果" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <button class="chip" id="dupChip" hidden title="重複描繪偵測：重複的線會讓長度直接翻倍" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <button class="chip" id="vfChip" hidden title="驗算報告：程式讀出來的尺寸與數量，哪些驗過、哪些沒得驗" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <button class="chip" id="sheetChip" hidden title="這張圖的圖號。會標註在每一列的數量出處，也會匯出成獨立欄位" style="cursor:pointer;border:1px solid var(--line);font:inherit"></button>
+          <span class="chip" id="scaleChip">比例：未設定</span>
+        </div>
+        <canvas id="cv"></canvas>
+        <div class="viewfoot">
+          <span id="coord" class="num">—</span>
+          <span class="muted">左鍵下點 · 雙擊／右鍵／<span class="k">Enter</span> 結束 · <span class="k">Esc</span> 取消 · <span class="k">Backspace</span> 退一點 · 滾輪縮放</span>
+          <span class="spacer"></span>
+          <span id="drawName" class="muted">未載入圖面</span>
+        </div>
+        <div class="mlist" id="mlist"></div>
+      </div>
+    </section>
+
+    <!-- 右：已選 + 採購包 -->
+    <!-- 右欄改成分頁。原本四區垂直堆疊，等於把四個不同生命週期階段
+         （已選 → 採購包 → 基準版/請購單 → 發包單）塞進 340px 寬的一欄，
+         每區只分到 26vh，真正在用的時候反而看不完。 -->
+    <section class="col show" id="colRight">
+      <h2>
+        <div class="seg" id="rtabs" role="tablist">
+          <button data-rt="cart" aria-pressed="true">已選 <span id="cartCount">0</span></button>
+          <button data-rt="pkg" aria-pressed="false">採購包 <span id="pkgCount">0</span></button>
+          <button data-rt="doc" aria-pressed="false">單據 <span id="docCount">0</span></button>
+        </div>
+        <button class="btn sm" id="btnTools" style="margin-left:auto" title="投標價組成 / 風險模擬 / 行情連動 / 廠商主檔">分析</button>
+        <button class="colx" data-col="R" title="收合右欄（Alt+→）">›</button>
+      </h2>
+      <div class="minilab" data-col="R" title="展開右欄">已選 / 採購包 / 單據</div>
+
+      <div class="rpane on" id="rpCart">
+        <div class="scroll" id="cart"></div>
+        <div class="totbar" id="totals"></div>
+        <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap">
+          <!-- 這一排只留「對已選清單做的事」。投標價組成、風險模擬、行情連動、
+               廠商主檔是**專案層級**的動作，跟勾了哪幾項無關 ——
+               放在分頁裡等於把它們鎖起來，所以移到標題列那顆「分析」。 -->
+          <button class="btn primary" id="btnQuickPr">一鍵轉請購單</button>
+          <button class="btn" id="btnToPkg">轉採購 Package</button>
+          <button class="btn" id="btnAutoPkg">自動建議拆包</button>
+          <button class="btn" id="btnClearCart">清空</button>
+        </div>
+      </div>
+
+      <div class="rpane" id="rpPkg"><div class="scroll" id="pkgs"></div></div>
+
+      <div class="rpane" id="rpDoc">
+        <div class="scroll" id="docScroll">
+          <!-- 沒有內容時整塊隱藏（含標題），不留空盒子。
+               產生了 PR／PO 才會出現 —— 它同時是檢視、匯出、轉發包單、改狀態的唯一入口，
+               所以是「空的時候收起來」而不是拿掉。 -->
+          <h3 class="dsec" id="hdBl" hidden>基準版 / 請購單<span class="chip" id="blCount">0</span></h3>
+          <div id="baselines" hidden></div>
+          <h3 class="dsec" id="hdPo" hidden>發包單 (PO)<span class="chip" id="poCount">0</span></h3>
+          <div id="pos" hidden></div>
+          <div class="hint" id="docEmpty" style="padding:16px 12px;text-align:center">尚無單據。<br>在「已選」頁按<b>一鍵轉請購單</b>即可產生。</div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<input type="file" id="fileDrawing" accept=".dxf,.dwg,.pdf,application/pdf" hidden>
+<input type="file" id="fileBoq" accept=".csv,text/csv" hidden>
+<input type="file" id="filePcces" accept=".xlsx" hidden>
+<input type="file" id="fileProject" accept=".json,application/json" hidden>
+<input type="file" id="fileVendors" accept=".json,application/json" hidden>
+<input type="file" id="fileDoc" multiple hidden>
+
+<dialog id="dlg"><h3 id="dlgTitle">—</h3><div class="dbody" id="dlgBody"></div><footer id="dlgFoot"></footer></dialog>
+
+<script type="module" src="./js/takeoff/app.js"></script>
+</body>
+</html>

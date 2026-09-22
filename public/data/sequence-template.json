@@ -1,0 +1,1444 @@
+{
+  "version": "1.0",
+  "name": "施工工序範本（機電／土建介面）",
+  "note": "本範本為一般工程慣例推導，非特定專案的圖說要求。載入圖說/規範後系統會逐條比對；找不到證據者一律標示為「建議工序／需工程確認」。",
+  "settings": {
+    "projectStart": null,
+    "siteBufferDays": 3,
+    "submittalDays": 14,
+    "prToPoDays": 7,
+    "calendar": {
+      "weekend": [
+        0,
+        6
+      ],
+      "holidays": []
+    }
+  },
+  "tasks": [
+    {
+      "code": "410-010",
+      "seq": "010",
+      "wbs": "410",
+      "name": "施工圖說確認",
+      "duration": 3,
+      "preds": [],
+      "crew": "工程/PM",
+      "interfaces": [
+        "設計單位"
+      ],
+      "content": "依核定圖說確認管線路徑與標高",
+      "precondition": "取得核定圖說"
+    },
+    {
+      "code": "410-020",
+      "seq": "020",
+      "wbs": "410",
+      "name": "給水管材料送審",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "管材/管件/閥類送審",
+      "precondition": "型錄、試驗報告齊備",
+      "bomCodes": [
+        "410.01"
+      ]
+    },
+    {
+      "code": "410-030",
+      "seq": "030",
+      "wbs": "410",
+      "name": "放樣",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "現場放樣定位",
+      "precondition": "結構體完成"
+    },
+    {
+      "code": "410-040",
+      "seq": "040",
+      "wbs": "410",
+      "name": "套管預埋",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "牆版穿越處預埋套管",
+      "precondition": "模板組立前",
+      "hidden": true
+    },
+    {
+      "code": "410-050",
+      "seq": "050",
+      "wbs": "410",
+      "name": "吊架施工",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "410-040",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "管道支吊架安裝",
+      "precondition": "結構位置確認"
+    },
+    {
+      "code": "410-060",
+      "seq": "060",
+      "wbs": "410",
+      "name": "給水主管施工",
+      "duration": 8,
+      "preds": [
+        {
+          "code": "410-050",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "410-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "主幹管配裝",
+      "precondition": "吊架完成、材料送審核准",
+      "bomCodes": [
+        "410.01"
+      ]
+    },
+    {
+      "code": "410-070",
+      "seq": "070",
+      "wbs": "410",
+      "name": "給水支管施工",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "410-060",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "分支管配裝至衛生設備",
+      "precondition": "主管完成",
+      "bomCodes": [
+        "410.01"
+      ]
+    },
+    {
+      "code": "410-080",
+      "seq": "080",
+      "wbs": "410",
+      "name": "給水管路試壓",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "410-070",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "水壓試驗並記錄",
+      "precondition": "配管完成"
+    },
+    {
+      "code": "410-090",
+      "seq": "090",
+      "wbs": "410",
+      "name": "隱蔽驗收",
+      "duration": 1,
+      "preds": [
+        {
+          "code": "410-080",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造",
+        "裝修"
+      ],
+      "content": "封板前隱蔽檢查",
+      "precondition": "試壓合格",
+      "hidden": true
+    },
+    {
+      "code": "410-100",
+      "seq": "100",
+      "wbs": "410",
+      "name": "管路保溫",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "410-090",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "保溫材包覆",
+      "precondition": "隱蔽驗收通過"
+    },
+    {
+      "code": "420-010",
+      "seq": "010",
+      "wbs": "420",
+      "name": "排水管材料送審",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "PVC 管材送審",
+      "bomCodes": [
+        "420.01"
+      ]
+    },
+    {
+      "code": "420-020",
+      "seq": "020",
+      "wbs": "420",
+      "name": "排水套管預埋",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "樓版排水孔套管",
+      "hidden": true
+    },
+    {
+      "code": "420-030",
+      "seq": "030",
+      "wbs": "420",
+      "name": "排水主管施工",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "420-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "420-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "立管與橫主管",
+      "precondition": "套管完成、材料送審核准",
+      "bomCodes": [
+        "420.01"
+      ]
+    },
+    {
+      "code": "420-040",
+      "seq": "040",
+      "wbs": "420",
+      "name": "排水支管施工",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "420-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "器具排水支管",
+      "bomCodes": [
+        "420.01"
+      ]
+    },
+    {
+      "code": "420-050",
+      "seq": "050",
+      "wbs": "420",
+      "name": "排水滿水試驗",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "420-040",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "滿水/通水試驗"
+    },
+    {
+      "code": "450-010",
+      "seq": "010",
+      "wbs": "450",
+      "name": "衛生設備送審",
+      "duration": 14,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "馬桶/面盆/龍頭送審",
+      "bomCodes": [
+        "450.01"
+      ]
+    },
+    {
+      "code": "450-020",
+      "seq": "020",
+      "wbs": "450",
+      "name": "衛浴設備安裝",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "410-090",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "420-050",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "450-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "interfaces": [
+        "裝修"
+      ],
+      "content": "器具定位安裝",
+      "precondition": "隱蔽驗收通過、面磚完成",
+      "bomCodes": [
+        "450.01"
+      ]
+    },
+    {
+      "code": "450-030",
+      "seq": "030",
+      "wbs": "450",
+      "name": "給排水系統測試",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "450-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "全系統通水與排水測試"
+    },
+    {
+      "code": "460-010",
+      "seq": "010",
+      "wbs": "460",
+      "name": "水箱送審",
+      "duration": 20,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "不鏽鋼水箱製造圖送審",
+      "bomCodes": [
+        "460.01"
+      ]
+    },
+    {
+      "code": "460-020",
+      "seq": "020",
+      "wbs": "460",
+      "name": "水箱基座施工",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "土建",
+      "interfaces": [
+        "給排水"
+      ],
+      "content": "RC 基座澆置",
+      "bomCodes": [
+        "130.01"
+      ]
+    },
+    {
+      "code": "460-030",
+      "seq": "030",
+      "wbs": "460",
+      "name": "水箱安裝",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "460-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "460-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "給排水",
+      "content": "吊裝定位與配管",
+      "bomCodes": [
+        "460.01"
+      ]
+    },
+    {
+      "code": "460-040",
+      "seq": "040",
+      "wbs": "460",
+      "name": "水箱單機測試",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "460-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "液位控制與滿水測試"
+    },
+    {
+      "code": "310-010",
+      "seq": "010",
+      "wbs": "310",
+      "name": "配電盤送審",
+      "duration": 20,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "盤體製造圖與元件表送審",
+      "bomCodes": [
+        "310.01"
+      ]
+    },
+    {
+      "code": "310-020",
+      "seq": "020",
+      "wbs": "310",
+      "name": "盤體基座施工",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "土建",
+      "interfaces": [
+        "電氣"
+      ],
+      "content": "機房基座與槽鋼",
+      "bomCodes": [
+        "130.01"
+      ]
+    },
+    {
+      "code": "310-030",
+      "seq": "030",
+      "wbs": "310",
+      "name": "配電盤安裝",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "310-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "310-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "content": "盤體就位固定",
+      "precondition": "基座完成、盤體到場",
+      "bomCodes": [
+        "310.01"
+      ]
+    },
+    {
+      "code": "310-040",
+      "seq": "040",
+      "wbs": "310",
+      "name": "一次側配線",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "310-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "320-050",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "content": "幹線端子接續",
+      "bomCodes": [
+        "321.01"
+      ]
+    },
+    {
+      "code": "310-050",
+      "seq": "050",
+      "wbs": "310",
+      "name": "絕緣測試",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "310-040",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "絕緣電阻量測"
+    },
+    {
+      "code": "310-060",
+      "seq": "060",
+      "wbs": "310",
+      "name": "送電",
+      "duration": 1,
+      "preds": [
+        {
+          "code": "310-050",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "電氣",
+      "interfaces": [
+        "監造",
+        "台電"
+      ],
+      "content": "受電與相序確認"
+    },
+    {
+      "code": "320-010",
+      "seq": "010",
+      "wbs": "320",
+      "name": "電纜材料送審",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "電纜/線槽送審",
+      "bomCodes": [
+        "321.01",
+        "321.02",
+        "323.01"
+      ]
+    },
+    {
+      "code": "320-020",
+      "seq": "020",
+      "wbs": "320",
+      "name": "幹線配管",
+      "duration": 8,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "RSC 管路敷設",
+      "bomCodes": [
+        "320.01"
+      ]
+    },
+    {
+      "code": "320-030",
+      "seq": "030",
+      "wbs": "320",
+      "name": "電纜架施工",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "320-020",
+          "rel": "SS",
+          "lag": 2
+        }
+      ],
+      "crew": "電氣",
+      "content": "梯型電纜架吊裝",
+      "bomCodes": [
+        "323.01"
+      ]
+    },
+    {
+      "code": "320-040",
+      "seq": "040",
+      "wbs": "320",
+      "name": "電纜佈放",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "320-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "320-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "320-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "content": "幹線電纜佈放",
+      "precondition": "線架完成、材料送審核准",
+      "bomCodes": [
+        "321.01",
+        "321.02"
+      ]
+    },
+    {
+      "code": "320-050",
+      "seq": "050",
+      "wbs": "320",
+      "name": "端子製作",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "320-040",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "content": "端子壓接與標示"
+    },
+    {
+      "code": "330-010",
+      "seq": "010",
+      "wbs": "330",
+      "name": "燈具送審",
+      "duration": 14,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "燈具型錄與光學報告送審",
+      "bomCodes": [
+        "331.01",
+        "332.01"
+      ]
+    },
+    {
+      "code": "330-020",
+      "seq": "020",
+      "wbs": "330",
+      "name": "照明配管配線",
+      "duration": 8,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "配管穿線至燈具位置",
+      "bomCodes": [
+        "320.01",
+        "322.01"
+      ]
+    },
+    {
+      "code": "330-030",
+      "seq": "030",
+      "wbs": "330",
+      "name": "燈具安裝",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "330-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "330-010",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "210-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "interfaces": [
+        "裝修"
+      ],
+      "content": "燈具定位安裝",
+      "precondition": "天花骨架完成、燈具到場",
+      "bomCodes": [
+        "331.01",
+        "332.01"
+      ]
+    },
+    {
+      "code": "330-040",
+      "seq": "040",
+      "wbs": "330",
+      "name": "點燈測試",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "330-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "310-060",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "全數點燈與照度抽測"
+    },
+    {
+      "code": "350-010",
+      "seq": "010",
+      "wbs": "350",
+      "name": "接地系統施工",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "電氣",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "接地極與接地線",
+      "bomCodes": [
+        "350.01"
+      ],
+      "hidden": true
+    },
+    {
+      "code": "350-020",
+      "seq": "020",
+      "wbs": "350",
+      "name": "接地電阻測試",
+      "duration": 1,
+      "preds": [
+        {
+          "code": "350-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "接地電阻量測"
+    },
+    {
+      "code": "510-010",
+      "seq": "010",
+      "wbs": "510",
+      "name": "消防材料送審",
+      "duration": 14,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "interfaces": [
+        "消防主管機關"
+      ],
+      "content": "管材與撒水頭送審",
+      "bomCodes": [
+        "510.01",
+        "520.01"
+      ]
+    },
+    {
+      "code": "510-020",
+      "seq": "020",
+      "wbs": "510",
+      "name": "消防配管",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "410-050",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "510-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "消防",
+      "content": "消防幹管與支管",
+      "bomCodes": [
+        "510.01"
+      ]
+    },
+    {
+      "code": "510-030",
+      "seq": "030",
+      "wbs": "510",
+      "name": "消防管路試壓",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "510-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "水壓試驗"
+    },
+    {
+      "code": "520-010",
+      "seq": "010",
+      "wbs": "520",
+      "name": "撒水頭安裝",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "510-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "210-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "消防",
+      "interfaces": [
+        "裝修"
+      ],
+      "content": "撒水頭就位",
+      "bomCodes": [
+        "520.01"
+      ]
+    },
+    {
+      "code": "520-020",
+      "seq": "020",
+      "wbs": "520",
+      "name": "消防聯動測試",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "520-010",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "530-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造",
+        "消防主管機關"
+      ],
+      "content": "警報與撒水聯動"
+    },
+    {
+      "code": "530-010",
+      "seq": "010",
+      "wbs": "530",
+      "name": "火警設備安裝",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "330-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "消防",
+      "content": "偵煙探測器與配線",
+      "bomCodes": [
+        "530.01"
+      ]
+    },
+    {
+      "code": "530-020",
+      "seq": "020",
+      "wbs": "530",
+      "name": "火警單機測試",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "530-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "逐只動作測試"
+    },
+    {
+      "code": "620-010",
+      "seq": "010",
+      "wbs": "620",
+      "name": "空調管材送審",
+      "duration": 14,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "冰水管與保溫材送審",
+      "bomCodes": [
+        "620.01"
+      ]
+    },
+    {
+      "code": "630-010",
+      "seq": "010",
+      "wbs": "630",
+      "name": "風管製作送審",
+      "duration": 14,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "風管加工圖送審",
+      "bomCodes": [
+        "630.01"
+      ]
+    },
+    {
+      "code": "630-020",
+      "seq": "020",
+      "wbs": "630",
+      "name": "風管吊架施工",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "空調",
+      "interfaces": [
+        "土建"
+      ],
+      "content": "風管支吊架"
+    },
+    {
+      "code": "630-030",
+      "seq": "030",
+      "wbs": "630",
+      "name": "風管安裝",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "630-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "630-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "空調",
+      "content": "主風管與分支",
+      "bomCodes": [
+        "630.01"
+      ]
+    },
+    {
+      "code": "630-040",
+      "seq": "040",
+      "wbs": "630",
+      "name": "風管試漏",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "630-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "漏風量測試"
+    },
+    {
+      "code": "620-020",
+      "seq": "020",
+      "wbs": "620",
+      "name": "冰水管施工",
+      "duration": 8,
+      "preds": [
+        {
+          "code": "630-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "620-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "空調",
+      "content": "冰水供回水管",
+      "bomCodes": [
+        "620.01"
+      ]
+    },
+    {
+      "code": "620-030",
+      "seq": "030",
+      "wbs": "620",
+      "name": "冰水管試壓",
+      "duration": 2,
+      "preds": [
+        {
+          "code": "620-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "水壓試驗"
+    },
+    {
+      "code": "610-010",
+      "seq": "010",
+      "wbs": "610",
+      "name": "冰水主機送審",
+      "duration": 30,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "主機規格與性能曲線送審",
+      "bomCodes": [
+        "610.01"
+      ]
+    },
+    {
+      "code": "610-020",
+      "seq": "020",
+      "wbs": "610",
+      "name": "主機基座施工",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "410-030",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "土建",
+      "interfaces": [
+        "空調"
+      ],
+      "content": "防震基座",
+      "bomCodes": [
+        "130.01"
+      ]
+    },
+    {
+      "code": "610-030",
+      "seq": "030",
+      "wbs": "610",
+      "name": "冰水主機安裝",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "610-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "610-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "空調",
+      "content": "主機吊裝定位",
+      "precondition": "基座完成、主機到場",
+      "bomCodes": [
+        "610.01"
+      ]
+    },
+    {
+      "code": "610-040",
+      "seq": "040",
+      "wbs": "610",
+      "name": "主機單機測試",
+      "duration": 3,
+      "preds": [
+        {
+          "code": "610-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "620-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "310-060",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "content": "試運轉"
+    },
+    {
+      "code": "210-010",
+      "seq": "010",
+      "wbs": "210",
+      "name": "天花材料送審",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "410-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "採購",
+      "content": "礦纖板與骨架送審",
+      "bomCodes": [
+        "210.01"
+      ]
+    },
+    {
+      "code": "210-020",
+      "seq": "020",
+      "wbs": "210",
+      "name": "天花骨架施工",
+      "duration": 6,
+      "preds": [
+        {
+          "code": "410-090",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "630-040",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "210-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "裝修",
+      "interfaces": [
+        "給排水",
+        "空調",
+        "電氣"
+      ],
+      "content": "T-Bar 骨架",
+      "precondition": "機電隱蔽驗收通過",
+      "bomCodes": [
+        "210.01"
+      ]
+    },
+    {
+      "code": "210-030",
+      "seq": "030",
+      "wbs": "210",
+      "name": "天花封板",
+      "duration": 4,
+      "preds": [
+        {
+          "code": "330-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "520-010",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "裝修",
+      "content": "板材封閉",
+      "precondition": "燈具與撒水頭安裝完成",
+      "bomCodes": [
+        "210.01"
+      ]
+    },
+    {
+      "code": "230-010",
+      "seq": "010",
+      "wbs": "230",
+      "name": "地坪面磚施工",
+      "duration": 8,
+      "preds": [
+        {
+          "code": "410-090",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "crew": "裝修",
+      "content": "抛光石英磚鋪設",
+      "bomCodes": [
+        "230.01"
+      ]
+    },
+    {
+      "code": "910-010",
+      "seq": "010",
+      "wbs": "910",
+      "name": "空調系統測試調整平衡",
+      "duration": 10,
+      "preds": [
+        {
+          "code": "610-040",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "630-040",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造"
+      ],
+      "content": "TAB 並提出報告",
+      "bomCodes": [
+        "910.01"
+      ]
+    },
+    {
+      "code": "910-020",
+      "seq": "020",
+      "wbs": "910",
+      "name": "竣工驗收",
+      "duration": 5,
+      "preds": [
+        {
+          "code": "450-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "330-040",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "520-020",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "910-010",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "210-030",
+          "rel": "FS",
+          "lag": 0
+        },
+        {
+          "code": "350-020",
+          "rel": "FS",
+          "lag": 0
+        }
+      ],
+      "isGate": true,
+      "crew": "品管",
+      "interfaces": [
+        "監造",
+        "業主"
+      ],
+      "content": "全案竣工查驗"
+    }
+  ]
+}
