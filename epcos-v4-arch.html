@@ -808,6 +808,18 @@ AND    row_version = $client_version;   -- 關鍵：版本比對
   </tbody>
 </table></div>
 
+<h3>6.3 單號編碼規則</h3>
+<p>承辦建立單據時須先選擇所屬法人實體，系統依法人前綴自動產生單號：</p>
+<div class="tbl-wrap"><table>
+  <thead><tr><th>法人實體</th><th>前綴</th><th>編碼格式</th><th>範例</th></tr></thead>
+  <tbody>
+    <tr><td>森陽</td><td class="m">SY</td><td><code>SY-YYMM-NNN</code></td><td>SY-2611-001</td></tr>
+    <tr><td>春合</td><td class="m">CC</td><td><code>CC-YYMM-NNN</code></td><td>CC-2611-001</td></tr>
+    <tr><td>涌全</td><td class="m">YQ</td><td><code>YQ-YYMM-NNN</code></td><td>YQ-2611-001</td></tr>
+  </tbody>
+</table></div>
+<p><code>YYMM</code> 為民國年月；<code>NNN</code> 為當月流水編號，每月重算自 001 起。適用所有單據類型（SR、PR、PO、驗收、請款）。</p>
+
 <!-- ═══════════════ 7. 角色權限 ═══════════════ -->
 <h2 id="auth">7. 角色與權限</h2>
 
@@ -815,7 +827,8 @@ AND    row_version = $client_version;   -- 關鍵：版本比對
   <thead><tr><th>角色</th><th>代碼</th><th>可操作範圍</th></tr></thead>
   <tbody>
     <tr><td><span class="st eng">工地主任</span></td><td class="m">SITE_MANAGER</td><td>建立/編輯 SR、送審、上傳附件</td></tr>
-    <tr><td><span class="st eng">工程主管</span></td><td class="m">ENG_SUPERVISOR</td><td>審核 SR、管理工程預算</td></tr>
+    <tr><td><span class="st eng">工地承辦</span></td><td class="m">SITE_OFFICER</td><td>派任單、分包計畫、工程預算編製、送審、日報、變更單、竣工檢查、結案</td></tr>
+    <tr><td><span class="st eng">工程主管</span></td><td class="m">ENG_SUPERVISOR</td><td>審核 SR、核准工程預算、核准變更</td></tr>
     <tr><td><span class="st proc">採購承辦</span></td><td class="m">PROC_OFFICER</td><td>PR 轉單、詢比議價、建立 PO</td></tr>
     <tr><td><span class="st proc">採購主管</span></td><td class="m">PROC_MANAGER</td><td>審核 PR/PO、管理採購預算</td></tr>
     <tr><td><span class="st fin">財務/出納</span></td><td class="m">FINANCE</td><td>請款審核、付款、預估應付</td></tr>
