@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ─── 支援實體 ───
+
+model LegalEntity {
+  id   String @id @default(cuid())
+  code String @unique // SY, CC, YQ
+  name String         // 森陽, 春合, 涌全
+
+  projects       Project[]
+  siteRequests   SiteRequest[]
+  purchaseReqs   PurchaseRequest[]
+  purchaseOrders PurchaseOrder[]
+  inspections    Inspection[]
+  paymentClaims  PaymentClaim[]
+  docSequences   DocSequence[]
+}
+
+model Project {
+  id            String      @id @default(cuid())
+  legalEntityId String
+  legalEntity   LegalEntity @relation(fields: [legalEntityId], references: [id])
+  code          String
+  name          String
+
+  siteRequests   SiteRequest[]
+  purchaseReqs   PurchaseRequest[]
+  purchaseOrders PurchaseOrder[]
+  inspections    Inspection[]
+  paymentClaims  PaymentClaim[]
+}
+
+model User {
+  id    String @id @default(cuid())
+  name  String
+  email String @unique
+  role  String // 申請人, 工地承辦, 工程主管, 採購承辦, 採購主管, 財務, 營運長, 總經理, 董事長, 系統管理
+}
+
+// ─── 單號序號 ───
+
+model DocSequence {
+  id            String      @id @default(cuid())
+  legalEntityId String
+  legalEntity   LegalEntity @relation(fields: [legalEntityId], references: [id])
+  typeCode      String      // S, R, P, A, I, V
+  yearMonth     String      // YYMM
+  lastSeq       Int         @default(0)
+
+  @@unique([legalEntityId, typeCode, yearMonth])
+}
+
+// ─── 核心單據 ───
+
+model SiteRequest {
+  id             String   @id @default(cuid())
+  docNumber      String   @unique
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String   @default("DRAFT")
+  rowVersion     Int      @default(1)
+  idempotencyKey String?  @unique
+  title          String
+  description    String?
+  items          String   @default("[]")
+  totalAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  legalEntity  LegalEntity       @relation(fields: [legalEntityId], references: [id])
+  project      Project           @relation(fields: [projectId], references: [id])
+  purchaseReqs PurchaseRequest[] @relation("SrToPr")
+}
+
+model PurchaseRequest {
+  id             String   @id @default(cuid())
+  docNumber      String   @unique
+  sourceId       String?
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String   @default("DRAFT")
+  rowVersion     Int      @default(1)
+  idempotencyKey String?  @unique
+  title          String
+  description    String?
+  items          String   @default("[]")
+  totalAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  legalEntity    LegalEntity     @relation(fields: [legalEntityId], references: [id])
+  project        Project         @relation(fields: [projectId], references: [id])
+  sourceSr       SiteRequest?    @relation("SrToPr", fields: [sourceId], references: [id])
+  purchaseOrders PurchaseOrder[] @relation("PrToPo")
+}
+
+model PurchaseOrder {
+  id             String   @id @default(cuid())
+  docNumber      String   @unique
+  sourceId       String?
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String   @default("DRAFT")
+  rowVersion     Int      @default(1)
+  idempotencyKey String?  @unique
+  title          String
+  vendorName     String?
+  items          String   @default("[]")
+  totalAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  legalEntity LegalEntity      @relation(fields: [legalEntityId], references: [id])
+  project     Project          @relation(fields: [projectId], references: [id])
+  sourcePr    PurchaseRequest? @relation("PrToPo", fields: [sourceId], references: [id])
+  inspections Inspection[]     @relation("PoToInsp")
+}
+
+model Inspection {
+  id             String    @id @default(cuid())
+  docNumber      String    @unique
+  sourceId       String?
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String    @default("PENDING")
+  rowVersion     Int       @default(1)
+  idempotencyKey String?   @unique
+  title          String
+  items          String    @default("[]")
+  totalAmount    Float     @default(0)
+  inspectedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  legalEntity   LegalEntity    @relation(fields: [legalEntityId], references: [id])
+  project       Project        @relation(fields: [projectId], references: [id])
+  sourcePo      PurchaseOrder? @relation("PoToInsp", fields: [sourceId], references: [id])
+  paymentClaims PaymentClaim[] @relation("InspToPay")
+}
+
+model PaymentClaim {
+  id             String   @id @default(cuid())
+  docNumber      String   @unique
+  sourceId       String?
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String   @default("DRAFT")
+  rowVersion     Int      @default(1)
+  idempotencyKey String?  @unique
+  title          String
+  items          String   @default("[]")
+  totalAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  legalEntity LegalEntity @relation(fields: [legalEntityId], references: [id])
+  project     Project     @relation(fields: [projectId], references: [id])
+  sourceInsp  Inspection? @relation("InspToPay", fields: [sourceId], references: [id])
+}
+
+// ─── 簽核（多態，不用 FK） ───
+
+model Approval {
+  id        String   @id @default(cuid())
+  docType   String   // SR, PR, PO, INSPECTION, PAYMENT_CLAIM
+  docId     String
+  action    String   // SUBMIT, APPROVE, REJECT
+  comment   String?
+  actorId   String
+  actorName String
+  createdAt DateTime @default(now())
+
+  @@index([docType, docId])
+}
