@@ -7,6 +7,7 @@ const TYPE_CODES: Record<string, string> = {
   INSPECTION: "A",
   PAYMENT_CLAIM: "I",
   VOUCHER: "V",
+  CHANGE_ORDER: "C",
 };
 
 export async function generateDocNumber(legalEntityId: string, docType: string): Promise<string> {

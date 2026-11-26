@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { generateDocNumber } from "../services/doc-number";
 import { AppError } from "../middleware/error-handler";
+import { autoCreateVoucher } from "../services/voucher";
 
 const router = Router();
 
@@ -134,7 +135,16 @@ router.post("/:id/approve", wrap(async (req, res) => {
       },
     }),
   ]);
-  res.json(updated);
+
+  const voucher = await autoCreateVoucher({
+    id: record.id,
+    docNumber: record.docNumber,
+    legalEntityId: record.legalEntityId,
+    projectId: record.projectId,
+    totalAmount: record.totalAmount,
+  });
+
+  res.json({ ...updated, voucher });
 }));
 
 export default router;

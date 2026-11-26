@@ -59,10 +59,41 @@ async function main() {
     });
   }
 
+  // Budgets for proj-sy-001
+  const budgetCategories = [
+    { projectId: "proj-sy-001", category: "MATERIAL", budgetAmount: 5000000 },
+    { projectId: "proj-sy-001", category: "EQUIPMENT", budgetAmount: 3000000 },
+    { projectId: "proj-sy-001", category: "ENGINEERING", budgetAmount: 8000000 },
+    { projectId: "proj-sy-001", category: "LABOR", budgetAmount: 4000000 },
+    { projectId: "proj-sy-001", category: "TOTAL", budgetAmount: 20000000 },
+  ];
+  for (const b of budgetCategories) {
+    await prisma.budget.upsert({
+      where: { projectId_category: { projectId: b.projectId, category: b.category } },
+      update: {},
+      create: { ...b, usedAmount: 0, executionRate: 0, alertLevel: "NORMAL" },
+    });
+  }
+
+  // Unit price seed data
+  const unitPrices = [
+    { category: "MATERIAL", itemName: "SD420 #8 鋼筋", unit: "噸", unitPrice: 28000, vendorName: "中鋼", region: "北部" },
+    { category: "MATERIAL", itemName: "SD420 #8 鋼筋", unit: "噸", unitPrice: 27500, vendorName: "東鋼", region: "北部" },
+    { category: "MATERIAL", itemName: "預拌混凝土 3000psi", unit: "m³", unitPrice: 2800, vendorName: "國產建材", region: "北部" },
+    { category: "EQUIPMENT", itemName: "50噸吊車", unit: "日", unitPrice: 35000, vendorName: "宏泰起重", region: "北部" },
+    { category: "LABOR", itemName: "模板工", unit: "工", unitPrice: 3500, region: "北部" },
+    { category: "LABOR", itemName: "鋼筋工", unit: "工", unitPrice: 3800, region: "北部" },
+  ];
+  for (const up of unitPrices) {
+    await prisma.unitPriceRecord.create({ data: up });
+  }
+
   console.log("Seed completed:");
   console.log(`  Legal entities: ${sy.code}, ${cc.code}, ${yq.code}`);
   console.log(`  Projects: ${proj1.code} + 2 more`);
   console.log(`  Users: ${users.length} users across 10 roles`);
+  console.log(`  Budgets: ${budgetCategories.length} categories for proj-sy-001`);
+  console.log(`  Unit prices: ${unitPrices.length} records`);
 }
 
 main()
