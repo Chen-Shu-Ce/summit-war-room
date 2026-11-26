@@ -44,6 +44,13 @@ router.post(
     }
 
     const { legalEntityId, projectId, title, description, items, totalAmount } = req.body;
+
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) throw new AppError(404, "Project not found");
+    if (project.status !== "ACTIVE") {
+      throw new AppError(400, "專案尚未完成預算簽核，無法建立需求單 (需要狀態: ACTIVE，目前: " + project.status + ")");
+    }
+
     const docNumber = await generateDocNumber(legalEntityId, "SR");
 
     const sr = await prisma.siteRequest.create({

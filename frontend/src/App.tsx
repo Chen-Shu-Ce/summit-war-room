@@ -3,6 +3,9 @@ import { AuthProvider, useAuth } from './auth';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
+import ProjectsPage from './pages/ProjectsPage';
+import SubcontractPlansPage from './pages/SubcontractPlansPage';
+import EngineeringBudgetsPage from './pages/EngineeringBudgetsPage';
 import SiteRequestsPage from './pages/SiteRequestsPage';
 import PurchaseRequestsPage from './pages/PurchaseRequestsPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
@@ -28,6 +31,9 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<DashboardPage />} />
+            <Route path="projects" element={<ProjectsPage />} />
+            <Route path="subcontract-plans" element={<SubcontractPlansPage />} />
+            <Route path="engineering-budgets" element={<EngineeringBudgetsPage />} />
             <Route path="site-requests" element={<SiteRequestsPage />} />
             <Route path="purchase-requests" element={<PurchaseRequestsPage />} />
             <Route path="purchase-orders" element={<PurchaseOrdersPage />} />

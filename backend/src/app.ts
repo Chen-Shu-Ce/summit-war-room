@@ -4,6 +4,9 @@ import { authMiddleware } from "./middleware/auth";
 import { auditMiddleware } from "./middleware/audit-log";
 import { errorHandler } from "./middleware/error-handler";
 import authRouter from "./routes/auth";
+import projectsRouter from "./routes/projects";
+import subcontractPlansRouter from "./routes/subcontract-plans";
+import engineeringBudgetsRouter from "./routes/engineering-budgets";
 import siteRequestsRouter from "./routes/site-requests";
 import purchaseRequestsRouter from "./routes/purchase-requests";
 import purchaseOrdersRouter from "./routes/purchase-orders";
@@ -27,6 +30,9 @@ app.use(express.json());
 app.use("/api/v1/auth", authRouter);
 
 // Protected routes (with auth + audit logging)
+app.use("/api/v1/projects", authMiddleware, auditMiddleware, projectsRouter);
+app.use("/api/v1/subcontract-plans", authMiddleware, auditMiddleware, subcontractPlansRouter);
+app.use("/api/v1/engineering-budgets", authMiddleware, auditMiddleware, engineeringBudgetsRouter);
 app.use("/api/v1/site-requests", authMiddleware, auditMiddleware, siteRequestsRouter);
 app.use("/api/v1/purchase-requests", authMiddleware, auditMiddleware, purchaseRequestsRouter);
 app.use("/api/v1/purchase-orders", authMiddleware, auditMiddleware, purchaseOrdersRouter);

@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import prisma from "../prisma";
 
 const RESOURCE_MAP: Record<string, string> = {
+  "projects": "PROJECT",
+  "subcontract-plans": "SUBCONTRACT_PLAN",
+  "engineering-budgets": "ENGINEERING_BUDGET",
   "site-requests": "SR",
   "purchase-requests": "PR",
   "purchase-orders": "PO",
@@ -17,6 +20,7 @@ const RESOURCE_MAP: Record<string, string> = {
 const STATUS_CHANGE_SUFFIXES = [
   "/submit", "/approve", "/reject", "/complete",
   "/issue", "/convert-pr", "/convert-po", "/confirm",
+  "/register",
 ];
 
 const METHOD_ACTION: Record<string, string> = {

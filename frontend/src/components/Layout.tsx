@@ -4,7 +4,11 @@ import { useAuth } from '../auth';
 
 const NAV = [
   { label: '儀表板', to: '/' },
-  { group: '核心流程' },
+  { group: '專案前置' },
+  { label: '專案立案', to: '/projects' },
+  { label: '分包計畫', to: '/subcontract-plans' },
+  { label: '工程預算書', to: '/engineering-budgets' },
+  { group: '採購流程' },
   { label: '需求單 SR', to: '/site-requests' },
   { label: '採購申請 PR', to: '/purchase-requests' },
   { label: '發包單 PO', to: '/purchase-orders' },

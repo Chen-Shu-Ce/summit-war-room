@@ -1,6 +1,9 @@
 import prisma from "../prisma";
 
 const TYPE_CODES: Record<string, string> = {
+  PROJECT: "J",
+  SUBCONTRACT_PLAN: "B",
+  ENGINEERING_BUDGET: "E",
   SR: "S",
   PR: "R",
   PO: "P",

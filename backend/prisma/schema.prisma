@@ -20,25 +20,92 @@ model LegalEntity {
   purchaseOrders PurchaseOrder[]
   inspections    Inspection[]
   paymentClaims  PaymentClaim[]
-  docSequences   DocSequence[]
-  changeOrders   ChangeOrder[]
-  vouchers       Voucher[]
+  docSequences       DocSequence[]
+  changeOrders       ChangeOrder[]
+  vouchers           Voucher[]
+  subcontractPlans   SubcontractPlan[]
+  engineeringBudgets EngineeringBudget[]
 }
 
 model Project {
-  id            String      @id @default(cuid())
-  legalEntityId String
-  legalEntity   LegalEntity @relation(fields: [legalEntityId], references: [id])
-  code          String
-  name          String
+  id             String    @id @default(cuid())
+  docNumber      String    @unique
+  legalEntityId  String
+  legalEntity    LegalEntity @relation(fields: [legalEntityId], references: [id])
+  code           String
+  name           String
+  clientName     String?
+  location       String?
+  contractAmount Float     @default(0)
+  startDate      String?
+  endDate        String?
+  description    String?
+  managerId      String?
+  createdBy      String    @default("")
+  updatedBy      String    @default("")
+  status         String    @default("DRAFT") // DRAFT, REGISTERED, ACTIVE, COMPLETED, CLOSED
+  rowVersion     Int       @default(1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  siteRequests   SiteRequest[]
-  purchaseReqs   PurchaseRequest[]
-  purchaseOrders PurchaseOrder[]
-  inspections    Inspection[]
-  paymentClaims  PaymentClaim[]
-  budgets        Budget[]
-  changeOrders   ChangeOrder[]
+  siteRequests       SiteRequest[]
+  purchaseReqs       PurchaseRequest[]
+  purchaseOrders     PurchaseOrder[]
+  inspections        Inspection[]
+  paymentClaims      PaymentClaim[]
+  budgets            Budget[]
+  changeOrders       ChangeOrder[]
+  subcontractPlans   SubcontractPlan[]
+  engineeringBudgets EngineeringBudget[]
+}
+
+// ─── 分包計畫表 ───
+
+model SubcontractPlan {
+  id             String   @id @default(cuid())
+  docNumber      String   @unique
+  legalEntityId  String
+  projectId      String
+  createdBy      String
+  updatedBy      String
+  status         String   @default("DRAFT") // DRAFT, PENDING, APPROVED, REJECTED
+  rowVersion     Int      @default(1)
+  idempotencyKey String?  @unique
+  title          String
+  description    String?
+  items          String   @default("[]") // JSON: [{seq, workCategory, description, estimatedAmount, vendorType}]
+  totalAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  legalEntity        LegalEntity         @relation(fields: [legalEntityId], references: [id])
+  project            Project             @relation(fields: [projectId], references: [id])
+  engineeringBudgets EngineeringBudget[]
+}
+
+// ─── 工程預算書 ───
+
+model EngineeringBudget {
+  id                String   @id @default(cuid())
+  docNumber         String   @unique
+  legalEntityId     String
+  projectId         String
+  subcontractPlanId String?
+  createdBy         String
+  updatedBy         String
+  status            String   @default("DRAFT") // DRAFT, PENDING, APPROVED, REJECTED
+  rowVersion        Int      @default(1)
+  idempotencyKey    String?  @unique
+  title             String
+  description       String?
+  items             String   @default("[]") // JSON: [{seq, category, itemName, specification, unit, quantity, unitPrice, amount}]
+  totalAmount       Float    @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  legalEntity     LegalEntity      @relation(fields: [legalEntityId], references: [id])
+  project         Project          @relation(fields: [projectId], references: [id])
+  subcontractPlan SubcontractPlan? @relation(fields: [subcontractPlanId], references: [id])
 }
 
 model User {
@@ -184,7 +251,7 @@ model PaymentClaim {
 
 model Approval {
   id        String   @id @default(cuid())
-  docType   String   // SR, PR, PO, INSPECTION, PAYMENT_CLAIM, CHANGE_ORDER
+  docType   String   // PROJECT, SUBCONTRACT_PLAN, ENGINEERING_BUDGET, SR, PR, PO, INSPECTION, PAYMENT_CLAIM, CHANGE_ORDER
   docId     String
   action    String   // SUBMIT, APPROVE, REJECT
   comment   String?

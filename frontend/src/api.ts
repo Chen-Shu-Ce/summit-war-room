@@ -28,7 +28,13 @@ export const api = {
 
 export interface User { id: string; name: string; email: string; role: string; }
 export interface LegalEntity { id: string; code: string; name: string; }
-export interface Project { id: string; code: string; name: string; legalEntityId: string; legalEntity?: LegalEntity; }
+export interface Project {
+  id: string; docNumber: string; code: string; name: string; legalEntityId: string;
+  clientName?: string; location?: string; contractAmount: number;
+  startDate?: string; endDate?: string; description?: string; managerId?: string;
+  status: string; rowVersion: number; createdAt: string; updatedAt: string;
+  legalEntity?: LegalEntity;
+}
 
 export interface DocBase {
   id: string; docNumber: string; legalEntityId: string; projectId: string;
@@ -45,6 +51,35 @@ export const auth = {
   users: () => api.get<User[]>('/auth/users'),
   entities: () => api.get<LegalEntity[]>('/auth/entities'),
   projects: () => api.get<Project[]>('/auth/projects'),
+};
+
+export const projects = {
+  list: (params = '') => api.get<PagedResponse<Project>>(`/projects?${params}`),
+  get: (id: string) => api.get<Project>(`/projects/${id}`),
+  create: (data: unknown) => api.post<Project>('/projects', data),
+  update: (id: string, data: unknown) => api.put<Project>(`/projects/${id}`, data),
+  register: (id: string) => api.post<Project>(`/projects/${id}/register`),
+  complete: (id: string) => api.post<Project>(`/projects/${id}/complete`),
+};
+
+export const subcontractPlans = {
+  list: (params = '') => api.get<PagedResponse<DocBase>>(`/subcontract-plans?${params}`),
+  get: (id: string) => api.get<DocBase>(`/subcontract-plans/${id}`),
+  create: (data: unknown) => api.post<DocBase>('/subcontract-plans', data),
+  update: (id: string, data: unknown) => api.put<DocBase>(`/subcontract-plans/${id}`, data),
+  submit: (id: string) => api.post<DocBase>(`/subcontract-plans/${id}/submit`),
+  approve: (id: string) => api.post<DocBase>(`/subcontract-plans/${id}/approve`),
+  reject: (id: string) => api.post<DocBase>(`/subcontract-plans/${id}/reject`),
+};
+
+export const engineeringBudgets = {
+  list: (params = '') => api.get<PagedResponse<DocBase>>(`/engineering-budgets?${params}`),
+  get: (id: string) => api.get<DocBase>(`/engineering-budgets/${id}`),
+  create: (data: unknown) => api.post<DocBase>('/engineering-budgets', data),
+  update: (id: string, data: unknown) => api.put<DocBase>(`/engineering-budgets/${id}`, data),
+  submit: (id: string) => api.post<DocBase>(`/engineering-budgets/${id}/submit`),
+  approve: (id: string) => api.post<DocBase>(`/engineering-budgets/${id}/approve`),
+  reject: (id: string) => api.post<DocBase>(`/engineering-budgets/${id}/reject`),
 };
 
 export const siteRequests = {
