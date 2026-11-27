@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { subcontractPlans, auth, type DocBase, type PagedResponse, type LegalEntity, type Project } from '../api';
 import StatusBadge from '../components/StatusBadge';
+import ExcelImport from '../components/ExcelImport';
+import { parseExcelFile, downloadTemplate } from '../utils/excel';
 
 interface PlanItem {
   workCategory: string;
@@ -11,6 +13,34 @@ interface PlanItem {
 
 const EMPTY_ITEM: PlanItem = { workCategory: '', description: '', estimatedAmount: 0, vendorType: '專業分包' };
 const VENDOR_TYPES = ['專業分包', '勞務分包', '材料供應'];
+
+const PLAN_COL_MAP: Record<string, keyof PlanItem> = {
+  '工種': 'workCategory',
+  '說明': 'description',
+  '概估金額': 'estimatedAmount',
+  '廠商類型': 'vendorType',
+};
+
+function downloadPlanTemplate() {
+  downloadTemplate(
+    ['工種', '說明', '概估金額', '廠商類型'],
+    [
+      ['鋼構', '鋼構主體工程含施工架', '12000000', '專業分包'],
+      ['水電', '水電消防工程', '8000000', '專業分包'],
+      ['勞務', '一般勞務工', '4000000', '勞務分包'],
+    ],
+    '分包計畫匯入範本.xlsx',
+  );
+}
+
+async function importPlanItems(file: File): Promise<PlanItem[]> {
+  const rows = await parseExcelFile<PlanItem>(file, PLAN_COL_MAP, { ...EMPTY_ITEM });
+  return rows.map(r => ({
+    ...r,
+    estimatedAmount: Number(r.estimatedAmount) || 0,
+    vendorType: VENDOR_TYPES.includes(r.vendorType) ? r.vendorType : '專業分包',
+  }));
+}
 
 export default function SubcontractPlansPage() {
   const [data, setData] = useState<DocBase[]>([]);
@@ -107,6 +137,15 @@ function CreatePlanModal({ projects, onClose }: { projects: Project[]; onClose: 
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
   }
 
+  async function handleImport(file: File) {
+    try {
+      const imported = await importPlanItems(file);
+      if (imported.length > 0) setItems(imported);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Excel 匯入失敗');
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');
     try {
@@ -125,7 +164,7 @@ function CreatePlanModal({ projects, onClose }: { projects: Project[]; onClose: 
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <form onSubmit={handleSubmit} className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-bold mb-4">新增分包計畫</h2>
-        <p className="text-xs text-gray-500 mb-3">建立後可在列表點「編輯」修改內容</p>
+        <p className="text-xs text-gray-500 mb-3">可手動輸入或用 Excel 匯入工項，建立後可在列表點「編輯」修改</p>
         {error && <div className="bg-red-50 text-red-600 p-2 rounded mb-3 text-sm">{error}</div>}
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
@@ -156,7 +195,10 @@ function CreatePlanModal({ projects, onClose }: { projects: Project[]; onClose: 
 
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">分包工項</label>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-gray-700">分包工項</label>
+              <ExcelImport onImport={handleImport} onTemplate={downloadPlanTemplate} />
+            </div>
             <button type="button" onClick={() => setItems(prev => [...prev, { ...EMPTY_ITEM }])}
               className="text-xs text-blue-600 hover:underline">+ 新增工項</button>
           </div>
@@ -240,6 +282,15 @@ function EditPlanModal({ id, onClose }: { id: string; onClose: () => void }) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
   }
 
+  async function handleImport(file: File) {
+    try {
+      const imported = await importPlanItems(file);
+      if (imported.length > 0) setItems(imported);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Excel 匯入失敗');
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');
     try {
@@ -274,7 +325,10 @@ function EditPlanModal({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">分包工項</label>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-gray-700">分包工項</label>
+              <ExcelImport onImport={handleImport} onTemplate={downloadPlanTemplate} />
+            </div>
             <button type="button" onClick={() => setItems(prev => [...prev, { ...EMPTY_ITEM }])}
               className="text-xs text-blue-600 hover:underline">+ 新增工項</button>
           </div>

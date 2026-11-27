@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { engineeringBudgets, auth, type DocBase, type LegalEntity, type Project } from '../api';
 import StatusBadge from '../components/StatusBadge';
+import ExcelImport from '../components/ExcelImport';
+import { parseExcelFile, downloadTemplate } from '../utils/excel';
 
 interface BudgetItem {
   seq: number;
@@ -15,9 +17,44 @@ interface BudgetItem {
 
 const CATEGORIES = ['MATERIAL', 'EQUIPMENT', 'ENGINEERING', 'LABOR'];
 const CAT_LABELS: Record<string, string> = { MATERIAL: '材料', EQUIPMENT: '機具', ENGINEERING: '工程', LABOR: '勞務' };
+const LABEL_TO_CAT: Record<string, string> = { '材料': 'MATERIAL', '機具': 'EQUIPMENT', '工程': 'ENGINEERING', '勞務': 'LABOR' };
 
 function emptyItem(seq: number): BudgetItem {
   return { seq, category: 'MATERIAL', itemName: '', specification: '', unit: '', quantity: 0, unitPrice: 0, amount: 0 };
+}
+
+const BUDGET_COL_MAP: Record<string, keyof BudgetItem> = {
+  '類別': 'category',
+  '品項': 'itemName',
+  '規格': 'specification',
+  '單位': 'unit',
+  '數量': 'quantity',
+  '單價': 'unitPrice',
+};
+
+function downloadBudgetTemplate() {
+  downloadTemplate(
+    ['類別', '品項', '規格', '單位', '數量', '單價'],
+    [
+      ['材料', 'SD420 #8 鋼筋', 'D25', '噸', '50', '28000'],
+      ['材料', '預拌混凝土 3000psi', '3000psi', 'm³', '500', '2800'],
+      ['機具', '50噸吊車', '50T', '日', '60', '35000'],
+      ['工程', '鋼構工程', '', '式', '1', '8000000'],
+      ['勞務', '模板工', '', '工', '500', '3500'],
+    ],
+    '工程預算書匯入範本.xlsx',
+  );
+}
+
+async function importBudgetItems(file: File): Promise<BudgetItem[]> {
+  const rows = await parseExcelFile<BudgetItem>(file, BUDGET_COL_MAP, emptyItem(1));
+  return rows.map((r, i) => {
+    const qty = Number(r.quantity) || 0;
+    const price = Number(r.unitPrice) || 0;
+    const catStr = String(r.category);
+    const category = LABEL_TO_CAT[catStr] || (CATEGORIES.includes(catStr) ? catStr : 'MATERIAL');
+    return { ...r, seq: i + 1, category, quantity: qty, unitPrice: price, amount: qty * price };
+  });
 }
 
 export default function EngineeringBudgetsPage() {
@@ -62,6 +99,15 @@ export default function EngineeringBudgetsPage() {
   }
 
   const totalAmount = items.reduce((s, it) => s + it.amount, 0);
+
+  async function handleImport(file: File) {
+    try {
+      const imported = await importBudgetItems(file);
+      if (imported.length > 0) setItems(imported);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Excel 匯入失敗');
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault(); setError('');
@@ -156,7 +202,10 @@ export default function EngineeringBudgetsPage() {
 
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">預算項目</label>
+                <div className="flex items-center gap-3">
+                  <label className="text-sm font-medium text-gray-700">預算項目</label>
+                  <ExcelImport onImport={handleImport} onTemplate={downloadBudgetTemplate} />
+                </div>
                 <button type="button" onClick={addItem} className="text-xs text-blue-600 hover:underline">+ 新增項目</button>
               </div>
               <div className="border rounded overflow-x-auto">
@@ -253,6 +302,15 @@ function EditBudgetModal({ id, onClose }: { id: string; onClose: () => void }) {
 
   const totalAmount = items.reduce((s, it) => s + it.amount, 0);
 
+  async function handleImport(file: File) {
+    try {
+      const imported = await importBudgetItems(file);
+      if (imported.length > 0) setItems(imported);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Excel 匯入失敗');
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');
     try {
@@ -288,7 +346,10 @@ function EditBudgetModal({ id, onClose }: { id: string; onClose: () => void }) {
 
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">預算項目</label>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-gray-700">預算項目</label>
+              <ExcelImport onImport={handleImport} onTemplate={downloadBudgetTemplate} />
+            </div>
             <button type="button" onClick={() => setItems(prev => [...prev, emptyItem(prev.length + 1)])}
               className="text-xs text-blue-600 hover:underline">+ 新增項目</button>
           </div>
