@@ -17,6 +17,7 @@ export default function SubcontractPlansPage() {
   const [projectFilter, setProjectFilter] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     const params = projectFilter ? `projectId=${projectFilter}` : '';
@@ -66,6 +67,7 @@ export default function SubcontractPlansPage() {
                 <td className="p-3 text-right">${d.totalAmount.toLocaleString()}</td>
                 <td className="p-3"><StatusBadge status={d.status} /></td>
                 <td className="p-3 space-x-1">
+                  {(d.status === 'DRAFT' || d.status === 'REJECTED') && <button onClick={() => setEditingId(d.id)} className="text-orange-600 hover:underline text-xs">編輯</button>}
                   {d.status === 'DRAFT' && <button onClick={() => action(d.id, subcontractPlans.submit)} className="text-blue-600 hover:underline text-xs">送審</button>}
                   {d.status === 'PENDING' && (
                     <>
@@ -81,6 +83,7 @@ export default function SubcontractPlansPage() {
         </table>
       </div>
       {showCreate && <CreatePlanModal projects={projects} onClose={() => { setShowCreate(false); load(); }} />}
+      {editingId && <EditPlanModal id={editingId} onClose={() => { setEditingId(null); load(); }} />}
     </div>
   );
 }
@@ -122,6 +125,7 @@ function CreatePlanModal({ projects, onClose }: { projects: Project[]; onClose: 
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <form onSubmit={handleSubmit} className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-bold mb-4">新增分包計畫</h2>
+        <p className="text-xs text-gray-500 mb-3">建立後可在列表點「編輯」修改內容</p>
         {error && <div className="bg-red-50 text-red-600 p-2 rounded mb-3 text-sm">{error}</div>}
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
@@ -204,6 +208,123 @@ function CreatePlanModal({ projects, onClose }: { projects: Project[]; onClose: 
           <button type="button" onClick={onClose} className="px-4 py-2 border rounded text-sm">取消</button>
           <button type="submit" disabled={loading} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
             {loading ? '建立中...' : '建立'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function EditPlanModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [items, setItems] = useState<PlanItem[]>([]);
+  const [rowVersion, setRowVersion] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    subcontractPlans.get(id).then((d: DocBase) => {
+      setTitle(d.title);
+      setDescription((d as unknown as { description?: string }).description || '');
+      setItems(JSON.parse(d.items || '[]'));
+      setRowVersion(d.rowVersion);
+      setFetching(false);
+    });
+  }, [id]);
+
+  const totalAmount = items.reduce((sum, it) => sum + (it.estimatedAmount || 0), 0);
+
+  function updateItem(idx: number, field: keyof PlanItem, value: string | number) {
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true); setError('');
+    try {
+      await subcontractPlans.update(id, {
+        rowVersion, title, description,
+        items: items.map((it, i) => ({ seq: i + 1, ...it })),
+      });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error');
+    } finally { setLoading(false); }
+  }
+
+  if (fetching) return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6">載入中...</div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <form onSubmit={handleSubmit} className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <h2 className="text-lg font-bold mb-4">編輯分包計畫</h2>
+        {error && <div className="bg-red-50 text-red-600 p-2 rounded mb-3 text-sm">{error}</div>}
+        <div className="mb-3">
+          <label className="block text-sm font-medium text-gray-700 mb-1">標題</label>
+          <input value={title} onChange={e => setTitle(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+        <div className="mb-3">
+          <label className="block text-sm font-medium text-gray-700 mb-1">說明</label>
+          <textarea value={description} onChange={e => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
+        </div>
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-700">分包工項</label>
+            <button type="button" onClick={() => setItems(prev => [...prev, { ...EMPTY_ITEM }])}
+              className="text-xs text-blue-600 hover:underline">+ 新增工項</button>
+          </div>
+          <div className="border rounded overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-gray-50 border-b">
+                  <th className="p-2 text-left w-24">工種</th>
+                  <th className="p-2 text-left">說明</th>
+                  <th className="p-2 text-right w-28">概估金額</th>
+                  <th className="p-2 text-left w-28">廠商類型</th>
+                  <th className="p-2 w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it, idx) => (
+                  <tr key={idx} className="border-b">
+                    <td className="p-1"><input value={it.workCategory} onChange={e => updateItem(idx, 'workCategory', e.target.value)}
+                      className="w-full border rounded px-2 py-1 text-xs" /></td>
+                    <td className="p-1"><input value={it.description} onChange={e => updateItem(idx, 'description', e.target.value)}
+                      className="w-full border rounded px-2 py-1 text-xs" /></td>
+                    <td className="p-1"><input type="number" value={it.estimatedAmount || ''} onChange={e => updateItem(idx, 'estimatedAmount', Number(e.target.value))}
+                      className="w-full border rounded px-2 py-1 text-xs text-right" /></td>
+                    <td className="p-1">
+                      <select value={it.vendorType} onChange={e => updateItem(idx, 'vendorType', e.target.value)}
+                        className="w-full border rounded px-2 py-1 text-xs">
+                        {VENDOR_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-1 text-center">
+                      {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, i) => i !== idx))}
+                        className="text-red-400 hover:text-red-600">x</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-gray-50">
+                  <td colSpan={2} className="p-2 text-right font-medium">合計</td>
+                  <td className="p-2 text-right font-bold">${totalAmount.toLocaleString()}</td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button type="button" onClick={onClose} className="px-4 py-2 border rounded text-sm">取消</button>
+          <button type="submit" disabled={loading} className="px-4 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50">
+            {loading ? '儲存中...' : '儲存修改'}
           </button>
         </div>
       </form>

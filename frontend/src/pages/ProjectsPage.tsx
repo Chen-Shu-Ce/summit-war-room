@@ -18,6 +18,7 @@ const FIELDS = [
 export default function ProjectsPage() {
   const [data, setData] = useState<Project[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     projects.list().then(r => setData(r.data));
@@ -60,6 +61,7 @@ export default function ProjectsPage() {
                 <td className="p-3 text-right">${p.contractAmount.toLocaleString()}</td>
                 <td className="p-3"><StatusBadge status={p.status} /></td>
                 <td className="p-3 space-x-1">
+                  {p.status === 'DRAFT' && <button onClick={() => setEditingId(p.id)} className="text-orange-600 hover:underline text-xs">編輯</button>}
                   {p.status === 'DRAFT' && <button onClick={() => action(p.id, projects.register)} className="text-yellow-600 hover:underline text-xs">立案</button>}
                   {p.status === 'ACTIVE' && <button onClick={() => action(p.id, projects.complete)} className="text-blue-600 hover:underline text-xs">結案</button>}
                 </td>
@@ -71,6 +73,97 @@ export default function ProjectsPage() {
       </div>
       {showCreate && <CreateModal title="新增專案" fields={FIELDS} onClose={() => { setShowCreate(false); load(); }}
         onSubmit={d => projects.create(d).then(() => {})} />}
+      {editingId && <EditProjectModal id={editingId} onClose={() => { setEditingId(null); load(); }} />}
+    </div>
+  );
+}
+
+function EditProjectModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const [form, setForm] = useState({ code: '', name: '', clientName: '', location: '', contractAmount: 0, startDate: '', endDate: '', description: '' });
+  const [rowVersion, setRowVersion] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    projects.get(id).then((p: Project) => {
+      setForm({
+        code: p.code, name: p.name,
+        clientName: p.clientName || '', location: p.location || '',
+        contractAmount: p.contractAmount, startDate: p.startDate || '',
+        endDate: p.endDate || '', description: p.description || '',
+      });
+      setRowVersion(p.rowVersion);
+      setFetching(false);
+    });
+  }, [id]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true); setError('');
+    try {
+      await projects.update(id, { rowVersion, ...form });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error');
+    } finally { setLoading(false); }
+  }
+
+  if (fetching) return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6">載入中...</div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <form onSubmit={handleSubmit} className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <h2 className="text-lg font-bold mb-4">編輯專案</h2>
+        {error && <div className="bg-red-50 text-red-600 p-2 rounded mb-3 text-sm">{error}</div>}
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">專案代碼</label>
+            <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} required className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">專案名稱</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">業主</label>
+            <input value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">工地地點</label>
+            <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">合約金額</label>
+            <input type="number" value={form.contractAmount || ''} onChange={e => setForm(f => ({ ...f, contractAmount: Number(e.target.value) }))} className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">預計開工</label>
+            <input value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} placeholder="YYYY-MM" className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">預計完工</label>
+            <input value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} placeholder="YYYY-MM" className="w-full border rounded px-3 py-2 text-sm" />
+          </div>
+        </div>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">說明</label>
+          <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 border rounded text-sm">取消</button>
+          <button type="submit" disabled={loading} className="px-4 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50">
+            {loading ? '儲存中...' : '儲存修改'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

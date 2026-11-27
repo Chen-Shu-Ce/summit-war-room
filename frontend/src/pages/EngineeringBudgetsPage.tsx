@@ -23,6 +23,7 @@ function emptyItem(seq: number): BudgetItem {
 export default function EngineeringBudgetsPage() {
   const [data, setData] = useState<DocBase[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [entities, setEntities] = useState<LegalEntity[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState({ legalEntityId: '', projectId: '', title: '', description: '' });
@@ -107,6 +108,7 @@ export default function EngineeringBudgetsPage() {
                 <td className="p-3 text-right">${d.totalAmount.toLocaleString()}</td>
                 <td className="p-3"><StatusBadge status={d.status} /></td>
                 <td className="p-3 space-x-1">
+                  {(d.status === 'DRAFT' || d.status === 'REJECTED') && <button onClick={() => setEditingId(d.id)} className="text-orange-600 hover:underline text-xs">編輯</button>}
                   {d.status === 'DRAFT' && <button onClick={() => action(d.id, engineeringBudgets.submit)} className="text-blue-600 hover:underline text-xs">送審</button>}
                   {d.status === 'PENDING' && (
                     <>
@@ -211,6 +213,140 @@ export default function EngineeringBudgetsPage() {
           </form>
         </div>
       )}
+
+      {editingId && <EditBudgetModal id={editingId} onClose={() => { setEditingId(null); load(); }} />}
+    </div>
+  );
+}
+
+function EditBudgetModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [items, setItems] = useState<BudgetItem[]>([]);
+  const [rowVersion, setRowVersion] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    engineeringBudgets.get(id).then((d: DocBase) => {
+      setTitle(d.title);
+      setDescription((d as unknown as { description?: string }).description || '');
+      const parsed = JSON.parse(d.items || '[]') as BudgetItem[];
+      setItems(parsed.length > 0 ? parsed : [emptyItem(1)]);
+      setRowVersion(d.rowVersion);
+      setFetching(false);
+    });
+  }, [id]);
+
+  function updateItem(idx: number, field: keyof BudgetItem, value: string | number) {
+    setItems(prev => {
+      const next = [...prev];
+      const item = { ...next[idx], [field]: value };
+      if (field === 'quantity' || field === 'unitPrice') {
+        item.amount = item.quantity * item.unitPrice;
+      }
+      next[idx] = item;
+      return next;
+    });
+  }
+
+  const totalAmount = items.reduce((s, it) => s + it.amount, 0);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true); setError('');
+    try {
+      await engineeringBudgets.update(id, {
+        rowVersion, title, description,
+        items: items.map((it, i) => ({ ...it, seq: i + 1 })),
+      });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error');
+    } finally { setLoading(false); }
+  }
+
+  if (fetching) return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6">載入中...</div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
+      <form onSubmit={handleSubmit} className="bg-white rounded-lg p-6 w-full max-w-4xl my-8">
+        <h2 className="text-lg font-bold mb-4">編輯工程預算書</h2>
+        {error && <div className="bg-red-50 text-red-600 p-2 rounded mb-3 text-sm">{error}</div>}
+        <div className="mb-3">
+          <label className="block text-sm font-medium text-gray-700 mb-1">標題</label>
+          <input value={title} onChange={e => setTitle(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">說明</label>
+          <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-700">預算項目</label>
+            <button type="button" onClick={() => setItems(prev => [...prev, emptyItem(prev.length + 1)])}
+              className="text-xs text-blue-600 hover:underline">+ 新增項目</button>
+          </div>
+          <div className="border rounded overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-gray-50 border-b">
+                  <th className="p-2 text-left w-8">#</th>
+                  <th className="p-2 text-left">類別</th>
+                  <th className="p-2 text-left">品項</th>
+                  <th className="p-2 text-left">規格</th>
+                  <th className="p-2 text-left w-16">單位</th>
+                  <th className="p-2 text-right w-20">數量</th>
+                  <th className="p-2 text-right w-24">單價</th>
+                  <th className="p-2 text-right w-28">金額</th>
+                  <th className="p-2 w-8"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it, idx) => (
+                  <tr key={idx} className="border-b">
+                    <td className="p-1 text-center text-gray-400">{it.seq}</td>
+                    <td className="p-1">
+                      <select value={it.category} onChange={e => updateItem(idx, 'category', e.target.value)} className="w-full border rounded px-1 py-1 text-xs">
+                        {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-1"><input value={it.itemName} onChange={e => updateItem(idx, 'itemName', e.target.value)} className="w-full border rounded px-1 py-1 text-xs" placeholder="品項名稱" /></td>
+                    <td className="p-1"><input value={it.specification} onChange={e => updateItem(idx, 'specification', e.target.value)} className="w-full border rounded px-1 py-1 text-xs" placeholder="規格" /></td>
+                    <td className="p-1"><input value={it.unit} onChange={e => updateItem(idx, 'unit', e.target.value)} className="w-full border rounded px-1 py-1 text-xs" placeholder="單位" /></td>
+                    <td className="p-1"><input type="number" value={it.quantity || ''} onChange={e => updateItem(idx, 'quantity', Number(e.target.value))} className="w-full border rounded px-1 py-1 text-xs text-right" /></td>
+                    <td className="p-1"><input type="number" value={it.unitPrice || ''} onChange={e => updateItem(idx, 'unitPrice', Number(e.target.value))} className="w-full border rounded px-1 py-1 text-xs text-right" /></td>
+                    <td className="p-1 text-right font-medium">${it.amount.toLocaleString()}</td>
+                    <td className="p-1">
+                      {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, i) => i !== idx).map((it2, i) => ({ ...it2, seq: i + 1 })))}
+                        className="text-red-400 hover:text-red-600">×</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-gray-50 font-medium">
+                  <td colSpan={7} className="p-2 text-right">合計</td>
+                  <td className="p-2 text-right">${totalAmount.toLocaleString()}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 border rounded text-sm">取消</button>
+          <button type="submit" disabled={loading} className="px-4 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50">
+            {loading ? '儲存中...' : '儲存修改'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
